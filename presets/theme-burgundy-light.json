@@ -1,0 +1,20 @@
+{
+  "name": "theme-burgundy-light",
+  "local_state": {
+    "brave.dark_mode": 2
+  },
+  "preferences": {
+    "brave.dark_mode_migrated": true,
+    "extensions.theme.id": "",
+    "extensions.theme.pack": "",
+    "browser.theme.user_color2": -8388576,
+    "browser.theme.color_variant2": 1,
+    "browser.theme.color_scheme2": 1,
+    "brave.new_tab_page.show_background_image": true,
+    "brave.new_tab_page.background": {
+      "type": "color",
+      "selected_value": "#EEF0F4",
+      "random": false
+    }
+  }
+}

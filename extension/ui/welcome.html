@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en" data-look="dark">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark light">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Welcome to Gamblium</title>
+<link rel="icon" href="icons/icon-32.png">
+<link rel="stylesheet" href="welcome.css">
+<script src="../content/menu.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <img class="lockup" alt="Gamblium" width="149" height="28">
+  <button type="button" id="skip" class="text">Skip setup, use defaults</button>
+</header>
+
+<!-- One decision per screen: what is asked on the left, the choices on the right. -->
+<main class="card">
+  <div class="ask">
+    <button type="button" id="back" class="backlink"><span aria-hidden="true">&larr;</span> Back</button>
+    <p class="eyebrow" id="count">&nbsp;</p>
+    <h1 id="title" tabindex="-1">&nbsp;</h1>
+    <p class="lead" id="line">&nbsp;</p>
+    <div class="grow"></div>
+    <p id="said" class="hint" role="status"></p>
+    <button type="button" id="next" class="primary wide">Next</button>
+    <button type="button" id="later" class="text later">Skip for now</button>
+  </div>
+
+  <div class="pick">
+    <section class="step" data-id="name" aria-label="Your name">
+      <label class="sr" for="name">Your first name</label>
+      <input id="name" type="text" maxlength="30" placeholder="Your first name" autocomplete="off" spellcheck="false">
+      <div class="preview" aria-hidden="true">
+        <p class="p-hello" id="pHello">&nbsp;</p>
+        <p class="p-date" id="pDate">&nbsp;</p>
+        <p class="p-time" id="pTime">&nbsp;</p>
+        <i class="p-search"></i>
+      </div>
+    </section>
+
+    <section class="step" data-id="look" aria-label="Theme" hidden>
+      <div class="looks" role="radiogroup" aria-label="Theme">
+        <label class="look" data-shows="dark">
+          <input type="radio" name="look" value="moon-dark" checked>
+          <span class="mini"><i class="m-bar"></i><i class="m-search"></i><i class="m-tiles"><b></b><b></b><b></b><b></b></i><i class="m-card"></i></span>
+          <span class="lname">Moonlight · dark</span>
+          <span class="lnote">Easy on the eyes at night.</span>
+        </label>
+        <label class="look" data-shows="light">
+          <input type="radio" name="look" value="moon-light">
+          <span class="mini"><i class="m-bar"></i><i class="m-search"></i><i class="m-tiles"><b></b><b></b><b></b><b></b></i><i class="m-card"></i></span>
+          <span class="lname">Moonlight · light</span>
+          <span class="lnote">Clear in a bright room.</span>
+        </label>
+      </div>
+      <button type="button" id="customise" class="quiet" aria-expanded="false" aria-controls="own">Customise the colours</button>
+      <div id="own" class="own" hidden>
+        <label>Accent <input type="color" id="ownAccent" value="#c9ced8"></label>
+        <label>Background <input type="color" id="ownBg" value="#030304"></label>
+        <button type="button" id="ownReset" class="text">Back to the theme</button>
+      </div>
+    </section>
+
+    <section class="step" data-id="night" aria-label="Websites" hidden>
+      <div class="options" role="radiogroup" aria-label="Dark websites">
+        <label class="option"><input type="radio" name="night" value="yes" checked><span class="oname">YES, make white websites dark</span><span class="onote">Photos and videos are left alone.</span></label>
+        <label class="option"><input type="radio" name="night" value="no"><span class="oname">NO, leave websites as they are</span><span class="onote">Only Gamblium's own pages and frame are dark.</span></label>
+      </div>
+    </section>
+
+    <section class="step" data-id="search" aria-label="Search engine" hidden>
+      <div class="options" id="engines" role="radiogroup" aria-label="Search engine"></div>
+      <p class="hint">The address bar has its own setting. <button type="button" id="openSearch" class="text">Open it</button></p>
+    </section>
+
+    <section class="step" data-id="sites" aria-label="Sites you use most" hidden>
+      <ul id="starters" class="starters"></ul>
+    </section>
+
+    <section class="step" data-id="import" aria-label="Import" hidden>
+      <div class="options" role="radiogroup" aria-label="Import">
+        <label class="option"><input type="radio" name="import" value="yes"><span class="oname">YES, bring my bookmarks and passwords</span><span class="onote">Opens the importer in a new tab. You choose what comes.</span></label>
+        <label class="option"><input type="radio" name="import" value="no" checked><span class="oname">NO, start fresh</span><span class="onote">You can import later from Settings.</span></label>
+      </div>
+    </section>
+
+    <section class="step" data-id="newtab" aria-label="New tab page" hidden>
+      <ul id="parts" class="parts"></ul>
+      <div class="seg" role="radiogroup" aria-label="Clock">
+        <label><input type="radio" name="clock" value="auto" checked>Clock as this computer</label>
+        <label><input type="radio" name="clock" value="12">12-hour</label>
+        <label><input type="radio" name="clock" value="24">24-hour</label>
+      </div>
+    </section>
+
+    <section class="step" data-id="done" aria-label="Summary" hidden>
+      <ul class="summary" id="summary"></ul>
+      <button type="button" id="restart" class="quiet">Restart Gamblium now</button>
+    </section>
+  </div>
+</main>
+
+<ol class="dots" id="dots" aria-hidden="true"></ol>
+
+<script type="module" src="welcome.js"></script>
+</body>
+</html>

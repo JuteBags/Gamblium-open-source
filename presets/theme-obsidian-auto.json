@@ -1,0 +1,20 @@
+{
+  "name": "theme-obsidian-auto",
+  "local_state": {
+    "brave.dark_mode": 0
+  },
+  "preferences": {
+    "brave.dark_mode_migrated": true,
+    "extensions.theme.id": "",
+    "extensions.theme.pack": "",
+    "browser.theme.user_color2": -7567229,
+    "browser.theme.color_variant2": 2,
+    "browser.theme.color_scheme2": 0,
+    "brave.new_tab_page.show_background_image": true,
+    "brave.new_tab_page.background": {
+      "type": "color",
+      "selected_value": "#0C0C0C",
+      "random": false
+    }
+  }
+}

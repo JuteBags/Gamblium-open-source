@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark light">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings · Gamblium</title>
+<link rel="icon" href="icons/icon-32.png">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+<script src="scheme.js"></script>
+<script src="../content/menu.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <img class="mark" alt="" width="22" height="22">
+  <span class="product">Gamblium</span>
+  <nav aria-label="Gamblium pages">
+    <a href="dashboard.html">Tabs and memory</a>
+    <span class="navhead">Library</span>
+    <a class="sub" href="history.html">History</a>
+    <a class="sub" href="downloads.html">Downloads</a>
+    <a class="sub" href="sessions.html">Sessions</a>
+    <a href="security.html">Security</a>
+    <a href="settings.html" aria-current="page">Settings</a>
+  </nav>
+</header>
+
+<main class="page">
+  <div class="title">
+    <h1>Settings</h1>
+    <p>Changes are saved as you make them; a proxy waits for Apply. <span id="saved" class="saved" role="status"></span></p>
+    <input id="find" type="search" class="find" placeholder="Find in Settings" aria-label="Find in Settings" autocomplete="off" spellcheck="false">
+  </div>
+  <p id="nofind" class="empty" hidden>No setting matches. Try another word.</p>
+
+  <div class="settings">
+    <nav class="areas" aria-label="Settings areas">
+      <a href="#tabs" data-area="tabs">Tabs<span>Freezing and sleeping</span></a>
+      <a href="#look" data-area="look">Appearance<span>Colours, light sites</span></a>
+      <a href="#downloads" data-area="downloads">Downloads<span>Folder, Gamblium's downloader, torrents</span></a>
+      <a href="#network" data-area="network">Network<span>Proxy</span></a>
+      <a href="#agents" data-area="agents">Agents<span>Control from the command line</span></a>
+      <a href="#profile" data-area="profile">This profile<span>Label and versions</span></a>
+      <a href="#browser" data-area="browser">Browser<span>Search, privacy, passwords</span></a>
+    </nav>
+    <div class="area">
+      <section class="panel" data-area="tabs" aria-labelledby="freeze-title">
+        <header><h2 id="freeze-title">Freezing tabs</h2></header>
+        <div class="fields">
+          <div class="field">
+            <label class="check"><input type="checkbox" id="freezeEnabled"> Freeze hidden tabs</label>
+            <p class="hint">Showing tabs and tabs playing sound never freeze.</p>
+          </div>
+          <div id="freezeNote" class="notice warn" hidden>Freezing is off in this browser because it was not started by Gamblium's launcher.</div>
+          <div class="field">
+            <label class="name" for="freezeSec">After a tab has been hidden for</label>
+            <div class="inline"><input type="number" id="freezeSec" min="10" max="3600" step="5"> <span>seconds</span></div>
+          </div>
+          <div class="field">
+            <label class="name" for="defaultTemp">Background level for sites you have not set</label>
+            <input type="range" id="defaultTemp" min="0" max="273" step="39" style="width: 100%">
+            <p class="hint" id="defaultTempText"></p>
+            <p class="hint">0 K frozen solid, 273 K never frozen.</p>
+          </div>
+          <div class="field">
+            <label class="name" for="awakeHosts">Always keep these sites awake</label>
+            <textarea id="awakeHosts" rows="3" spellcheck="false" placeholder="e.g. grafana.example.com"></textarea>
+            <p class="hint" id="awakeHostsHint">Never frozen or put to sleep. One site per line.</p>
+          </div>
+          <div class="field">
+            <label class="name" for="wakeHosts">Wake these sites for a moment now and then</label>
+            <textarea id="wakeHosts" rows="2" spellcheck="false" placeholder="e.g. mail.google.com"></textarea>
+            <div class="inline"><label for="wakeMin">Every</label> <input type="number" id="wakeMin" min="1" max="120" step="1"> <span>minutes, for a few seconds</span></div>
+            <p class="hint" id="wakeHostsHint">Woken now and then for new messages. One site per line.</p>
+          </div>
+          <div class="field">
+            <label class="check"><input type="checkbox" id="protectUploads"> Do not freeze a tab while it is uploading</label>
+            <p class="hint">Needs permission to see request sizes on every site.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" data-area="tabs" aria-labelledby="sleep-title">
+        <header><h2 id="sleep-title">Sleeping tabs</h2></header>
+        <div class="fields">
+          <div class="field">
+            <label class="check"><input type="checkbox" id="enabled"> Put hidden tabs to sleep</label>
+            <p class="hint">Showing, pinned and playing tabs never sleep.</p>
+          </div>
+          <div class="field">
+            <label class="name" for="delayMin">After a tab has been hidden for</label>
+            <div class="inline"><input type="number" id="delayMin" min="1" max="1440" step="1"> <span>minutes</span></div>
+          </div>
+          <div class="field">
+            <span class="name">When the computer is short on memory</span>
+            <div class="inline">
+              <label for="lowMb">Under</label> <input type="number" id="lowMb" min="0" max="65536" step="256"> <span>MB free, sleep after</span>
+              <input type="number" id="lowSec" min="30" max="86400" step="10" aria-label="Seconds hidden when memory is short"> <span>seconds</span>
+            </div>
+          </div>
+          <div class="field">
+            <label class="name" for="allowlist">Never put these sites to sleep</label>
+            <textarea id="allowlist" rows="4" spellcheck="false" placeholder="e.g. mail.google.com"></textarea>
+            <p class="hint" id="allowlistHint">One site per line. A site also covers its subdomains.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" data-area="look" aria-labelledby="look-title">
+        <header><h2 id="look-title">Appearance</h2></header>
+        <div class="fields">
+          <div class="field" id="modeField" hidden>
+            <span class="name">Light or dark</span>
+            <div id="modes" class="seg modes" role="group" aria-label="Light or dark">
+              <button type="button" data-mode="light">Light</button>
+              <button type="button" data-mode="dark">Dark</button>
+              <button type="button" data-mode="auto">Auto</button>
+            </div>
+            <p class="hint">Applies at the next start. <button type="button" id="restartNow" class="textlink">Restart now</button></p>
+          </div>
+          <div class="field">
+            <span class="name">Theme</span>
+            <div class="looks" role="radiogroup" aria-label="Theme">
+              <label class="look" data-shows="moon">
+                <input type="radio" name="scheme" value="moon">
+                <span class="mini"><i class="m-bar"></i><i class="m-search"></i><i class="m-tiles"><b></b><b></b><b></b><b></b></i></span>
+                <span class="lname">Moonlight</span>
+                <span class="lnote">Black and silver</span>
+              </label>
+              <label class="look" data-shows="obsidian">
+                <input type="radio" name="scheme" value="obsidian">
+                <span class="mini"><i class="m-bar"></i><i class="m-search"></i><i class="m-tiles"><b></b><b></b><b></b><b></b></i></span>
+                <span class="lname">Obsidian</span>
+                <span class="lnote">Matte black and chalk</span>
+              </label>
+              <label class="look" data-shows="felt">
+                <input type="radio" name="scheme" value="felt">
+                <span class="mini"><i class="m-bar"></i><i class="m-search"></i><i class="m-tiles"><b></b><b></b><b></b><b></b></i></span>
+                <span class="lname">Felt</span>
+                <span class="lnote">Green and gold</span>
+              </label>
+              <label class="look" data-shows="burgundy">
+                <input type="radio" name="scheme" value="burgundy">
+                <span class="mini"><i class="m-bar"></i><i class="m-search"></i><i class="m-tiles"><b></b><b></b><b></b><b></b></i></span>
+                <span class="lname">Burgundy</span>
+                <span class="lnote">Slate and rose</span>
+              </label>
+            </div>
+          </div>
+          <div class="field">
+            <span class="name">Colour sets</span>
+            <div id="presets" class="presets" role="group" aria-label="Colour sets"></div>
+            <label class="satrow" for="sat"><span id="satText">Colour strength</span><input type="range" id="sat" min="0" max="100" step="5" value="100"></label>
+          </div>
+          <div class="field" id="darkPagesField" hidden>
+            <label class="check"><input type="checkbox" id="darkPages"> Make light-only websites dark</label>
+            <label class="check" title="Shift + right-click always gives the browser's own menu. Pages you already have open change when they are reloaded."><input type="checkbox" id="ownRightClick"> Use Gamblium's right-click menu</label>
+            <p class="hint">Photos are left alone. Applies at the next start.</p>
+          </div>
+          <div class="field" id="brandField" hidden>
+            <label class="check"><input type="checkbox" id="brandOfficial"> Show Brave's own name and logo</label>
+            <p class="hint" id="brandHint">Applies at the next start.</p>
+          </div>
+          <div class="field">
+            <span class="name">Your own colours</span>
+            <div class="inline">
+              <label class="swatch"><input type="color" id="ownAccent" value="#c9ced8"> Accent</label>
+              <label class="swatch"><input type="color" id="ownBg" value="#030304"> Background</label>
+              <button type="button" id="ownReset" class="quiet">Back to the theme's colours</button>
+            </div>
+          </div>
+          <div class="field">
+            <label class="name" for="lightSites">Keep these sites light</label>
+            <textarea id="lightSites" rows="3" spellcheck="false" placeholder="e.g. docs.google.com"></textarea>
+            <p class="hint" id="lightSitesHint">Kept as designed when sites are made dark. One per line.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" data-area="browser" aria-labelledby="browser-title">
+        <header><h2 id="browser-title">The browser's own settings</h2></header>
+        <div class="fields">
+          <div class="field">
+            <div id="engine" class="engine">
+              <button type="button" data-open="chrome://settings/search">Search engine<span>What the address bar searches with</span></button>
+              <button type="button" data-open="chrome://settings/privacy">Privacy and security<span>Cookies, site permissions, clearing data</span></button>
+              <button type="button" data-open="chrome://settings/autofill">Passwords and autofill<span>Saved passwords, addresses, cards</span></button>
+              <button type="button" data-open="chrome://settings/languages">Languages<span>Page language, spell check</span></button>
+              <button type="button" data-open="chrome://settings/importData">Import<span>Bookmarks and passwords from another browser</span></button>
+              <button type="button" data-open="ui/shortcuts.html">Keyboard shortcuts<span>Every command and its keys</span></button>
+              <button type="button" data-open="chrome://extensions/">Extensions<span>Add, remove, switch off</span></button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" data-area="downloads" aria-labelledby="save-title">
+        <header><h2 id="save-title">Where files are saved</h2></header>
+        <div class="fields">
+          <div class="field">
+            <div><button type="button" id="saveFolder">Choose the folder and how you are asked</button></div>
+            <p class="hint">Opens the browser's own settings.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" data-area="downloads" aria-labelledby="own-title">
+        <header><h2 id="own-title">Gamblium's downloader</h2></header>
+        <p class="lead">Faster on slow servers; picks up interrupted files.</p>
+        <div class="fields">
+          <div class="field">
+            <span class="name">Which downloads it takes over</span>
+            <label class="check"><input type="radio" name="ownDownloader" value="big"> Big files only</label>
+            <label class="check"><input type="radio" name="ownDownloader" value="always"> Every download</label>
+            <label class="check"><input type="radio" name="ownDownloader" value="off"> None: the browser downloads everything</label>
+          </div>
+          <div class="field" id="ownMinField">
+            <div class="inline"><label for="ownMinMb">Hand files of</label> <input type="number" id="ownMinMb" min="1" max="100000" step="1"> <span>MB and more to Gamblium's downloader</span></div>
+          </div>
+          <div class="field">
+            <label class="check"><input type="checkbox" id="ownTorrents"> Open torrent files and magnet links in Gamblium's downloader</label>
+            <div class="inline"><label for="seedMinutes">Keep sharing a finished torrent for</label> <input type="number" id="seedMinutes" min="0" max="10080" step="5"> <span>minutes</span></div>
+            <p class="hint">0 stops as soon as the file is whole.</p>
+          </div>
+          <details class="how">
+            <summary>How it works</summary>
+            <p class="hint">Logged-in downloads go with your login. Private windows stay with the browser.</p>
+            <p class="hint">Torrents and magnet links open in Gamblium.</p>
+          </details>
+        </div>
+      </section>
+
+      <section class="panel" data-area="network" aria-labelledby="proxy-title">
+        <header><h2 id="proxy-title">Proxy</h2></header>
+        <p id="proxyNow" class="lead">Checking…</p>
+        <form id="proxyForm" class="fields" autocomplete="off">
+          <div class="field">
+            <label class="check"><input type="radio" name="mode" value="system"> Use the system setting</label>
+            <label class="check"><input type="radio" name="mode" value="direct"> Connect directly, no proxy</label>
+            <label class="check"><input type="radio" name="mode" value="fixed"> Send everything through this proxy</label>
+          </div>
+          <div class="field" id="proxyServer">
+            <div class="inline">
+              <label class="sr" for="pScheme">Proxy type</label>
+              <select id="pScheme"><option>http</option><option>https</option><option>socks4</option><option>socks5</option></select>
+              <label class="sr" for="pHost">Proxy host</label>
+              <input type="text" id="pHost" placeholder="e.g. 127.0.0.1" spellcheck="false" style="flex: 1; min-width: 120px">
+              <label class="sr" for="pPort">Proxy port</label>
+              <input type="text" id="pPort" class="port" inputmode="numeric" placeholder="8080">
+            </div>
+            <label class="name" for="pBypass" style="margin-top: 8px">Do not use the proxy for</label>
+            <input type="text" id="pBypass" spellcheck="false" placeholder="e.g. localhost, 127.0.0.1">
+          </div>
+          <div id="proxyError" class="notice bad" hidden></div>
+          <div class="row"><button type="submit" class="primary">Apply proxy</button></div>
+          <p class="hint">For the whole profile. To test through Burp, start a separate one:</p>
+          <div class="codecopy"><pre class="code" id="pentestCmd">gamblium launch --pentest --proxy http://127.0.0.1:8080</pre><button type="button" class="quiet copybtn" data-copy="pentestCmd">Copy</button></div>
+        </form>
+      </section>
+
+      <section class="panel" data-area="agents" aria-labelledby="agent-title">
+        <header><h2 id="agent-title">Control from the command line</h2></header>
+        <div class="fields">
+          <div class="field">
+            <label class="check"><input type="checkbox" id="bridge"> Let command-line agents control this profile</label>
+            <p class="hint">Any program under your Windows account can then control this profile (<span class="mono cmd">gamblium ctl</span>).</p>
+          </div>
+          <p id="bridgeNow" class="statusline" role="status">Checking…</p>
+          <div class="field" id="permitField" hidden>
+            <span class="name" id="permit-label">Agents may change settings</span>
+            <div class="seg permitseg" id="permitChoices" role="group" aria-labelledby="permit-label"></div>
+            <p class="hint" id="permitNow" role="status"></p>
+            <p class="hint" id="permitOff" hidden>Switch command-line control on first.</p>
+            <p class="hint">Without a permission, an agent waits for your answer.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" data-area="profile" aria-labelledby="profile-title">
+        <header><h2 id="profile-title">This profile</h2></header>
+        <div class="fields">
+          <label class="field">
+            <span class="name">Label</span>
+            <input type="text" id="profileLabel" maxlength="40" placeholder="e.g. work, personal" spellcheck="false">
+            <span class="hint">Shown in the popup and on saved sessions.</span>
+          </label>
+          <dl class="kv" id="about"></dl>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script type="module" src="settings.js"></script>
+</body>
+</html>

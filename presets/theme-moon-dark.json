@@ -1,0 +1,20 @@
+{
+  "name": "theme-moon-dark",
+  "local_state": {
+    "brave.dark_mode": 1
+  },
+  "preferences": {
+    "brave.dark_mode_migrated": true,
+    "extensions.theme.id": "",
+    "extensions.theme.pack": "",
+    "browser.theme.user_color2": -7696486,
+    "browser.theme.color_variant2": 2,
+    "browser.theme.color_scheme2": 2,
+    "brave.new_tab_page.show_background_image": true,
+    "brave.new_tab_page.background": {
+      "type": "color",
+      "selected_value": "#030304",
+      "random": false
+    }
+  }
+}

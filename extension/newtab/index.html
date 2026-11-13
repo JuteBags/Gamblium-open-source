@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark light">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>New Tab</title>
+<link rel="icon" href="../ui/icons/icon-32.png">
+<link rel="stylesheet" href="../ui/tokens.css">
+<link rel="stylesheet" href="newtab.css">
+<script src="../ui/scheme.js"></script>
+<script src="first.js"></script>
+<script src="../content/menu.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <h1 class="brand"><img alt="Gamblium" width="149" height="26"></h1>
+</header>
+
+<main>
+  <!-- One hero: the greeting leads, the time sits in the date line (critique, Nov 13 2026:
+       a large clock beside the greeting made two headlines compete). -->
+  <section class="hero" data-widget="clock" aria-label="Time">
+    <div class="hgroup">
+    <p id="hello" class="hello">&nbsp;</p>
+    <p class="date"><span id="date">&nbsp;</span><span class="dot" aria-hidden="true"> · </span><span id="time" class="time"></span></p>
+    </div>
+  </section>
+
+  <div class="finder">
+    <form id="search" class="search" role="search" autocomplete="off">
+      <label class="sr" for="q">Search the web, your tabs, bookmarks and history, or type an address</label>
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7.75" cy="7.75" r="5.25"/><path d="M11.75 11.75 16 16"/></svg>
+      <input id="q" name="q" type="text" inputmode="search" enterkeyhint="search" spellcheck="false" placeholder="Search, or type an address" role="combobox" aria-expanded="false" aria-controls="suggest" aria-autocomplete="list">
+    </form>
+    <ul id="suggest" class="suggest" role="listbox" aria-label="Suggestions" hidden></ul>
+  </div>
+
+  <!-- Spaces: this window's tab groups, one open at a time (spaces.js). -->
+  <nav class="spaces" id="spacesBar" aria-label="Spaces" hidden>
+    <ul id="spaces"></ul>
+    <button type="button" id="spaceNew" class="addspace" aria-label="New space" title="New space"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M7 2.5v9M2.5 7h9"/></svg></button>
+  </nav>
+
+  <section class="quick" data-widget="pins" aria-labelledby="pins-title">
+    <h2 id="pins-title">Quick access</h2>
+    <ul id="pins" class="tiles"></ul>
+    <form id="pinForm" class="pinform" hidden autocomplete="off">
+      <div id="pinOffers" class="pinoffers" role="group" aria-label="Your most visited, one click to pin" hidden></div>
+      <label>Name <input id="pinName" type="text" maxlength="60" placeholder="Shown under the tile"></label>
+      <label>Address <input id="pinUrl" type="text" spellcheck="false" placeholder="example.com" required></label>
+      <div class="acts">
+        <button type="submit" class="primary">Save</button>
+        <button type="button" id="pinLeft" class="quiet" aria-label="Move left">&larr;</button>
+        <button type="button" id="pinRight" class="quiet" aria-label="Move right">&rarr;</button>
+        <button type="button" id="pinRemove" class="quiet danger">Remove</button>
+        <button type="button" id="pinCancel" class="quiet">Cancel</button>
+      </div>
+      <p id="pinSaid" class="said" role="status"></p>
+    </form>
+  </section>
+
+  <div class="deck">
+    <section class="card" data-widget="top" aria-labelledby="top-title">
+      <h2 id="top-title">Most visited</h2>
+      <ul id="top" class="rows"></ul>
+      <p id="top-empty" class="empty" hidden>Sites you visit often will appear here.</p>
+    </section>
+
+    <section class="card" data-widget="closed" aria-labelledby="closed-title">
+      <h2 id="closed-title">Recently closed</h2>
+      <ul id="closed" class="rows"></ul>
+      <p id="closed-empty" class="empty" hidden>Nothing closed yet in this session.</p>
+    </section>
+
+    <section class="card" data-widget="status" aria-labelledby="status-title">
+      <h2 id="status-title">Right now</h2>
+      <dl class="facts">
+        <div><dt>Tabs open</dt><dd id="sTabs">&ndash;</dd></div>
+        <div><dt>Frozen</dt><dd id="sFrozen">&ndash;</dd></div>
+        <div><dt>Asleep</dt><dd id="sAsleep">&ndash;</dd></div>
+        <div><dt>Memory free</dt><dd id="sFree">&ndash;</dd></div>
+      </dl>
+      <div class="meter" role="img" id="sMeter" aria-label="Memory in use"><span id="sUsed"></span></div>
+      <p id="sLine" class="meta">&nbsp;</p>
+      <div class="acts">
+        <button type="button" id="sleepAll" class="primary">Sleep hidden tabs</button>
+        <button type="button" id="openDash" class="quiet">Tabs and memory</button>
+      </div>
+    </section>
+
+    <section class="card" data-widget="sessions" aria-labelledby="sessions-title">
+      <h2 id="sessions-title">Saved sessions</h2>
+      <ul id="sessions" class="rows"></ul>
+      <p id="sessions-empty" class="empty" hidden>No saved sessions. <button type="button" id="openSessions" class="text">Save this one</button></p>
+    </section>
+
+    <section class="card" data-widget="downloads" aria-labelledby="downloads-title">
+      <h2 id="downloads-title">Downloads</h2>
+      <ul id="downloads" class="rows"></ul>
+      <p id="downloads-empty" class="empty" hidden>No downloads yet.</p>
+    </section>
+
+    <section class="card" data-widget="notes" aria-labelledby="notes-title">
+      <h2 id="notes-title">Notes</h2>
+      <textarea id="notes" spellcheck="false" maxlength="4000" placeholder="Anything you want to see on every new tab." aria-labelledby="notes-title"></textarea>
+    </section>
+
+    <section class="card" data-widget="todo" aria-labelledby="todo-title">
+      <header><h2 id="todo-title">To do</h2><button type="button" id="todoClear" class="text small" hidden>Clear done</button></header>
+      <ul id="todo" class="todo"></ul>
+      <form id="todoForm" autocomplete="off"><label class="sr" for="todoText">Add something to do</label><input id="todoText" type="text" maxlength="120" placeholder="Add something, then Enter"></form>
+    </section>
+
+    <section class="card" data-widget="playing" aria-labelledby="playing-title">
+      <h2 id="playing-title">Playing now</h2>
+      <ul id="playing" class="rows"></ul>
+      <p id="playing-empty" class="empty" hidden>Nothing is playing in any tab.</p>
+    </section>
+
+    <section class="card" data-widget="heavy" aria-labelledby="heavy-title">
+      <h2 id="heavy-title">Heaviest tabs</h2>
+      <ul id="heavy" class="rows"></ul>
+      <p id="heavy-empty" class="empty" hidden>No figures: every other tab is asleep, or the Gamblium helper is not running.</p>
+    </section>
+
+    <section class="card" data-widget="recent" aria-labelledby="recent-title">
+      <h2 id="recent-title">Recently visited</h2>
+      <ul id="recent" class="rows"></ul>
+      <p id="recent-empty" class="empty" hidden>Pages you open will appear here.</p>
+    </section>
+
+    <section class="card" data-widget="marks" aria-labelledby="marks-title">
+      <h2 id="marks-title">Bookmarks</h2>
+      <ul id="marks" class="rows"></ul>
+      <p id="marks-empty" class="empty" hidden>No bookmarks yet. Ctrl+D adds the page you are on.</p>
+    </section>
+
+    <section class="card" data-widget="calendar" aria-labelledby="cal-title">
+      <header>
+        <h2 id="cal-title">Calendar</h2>
+        <div class="acts"><button type="button" id="calPrev" class="step" aria-label="Month before">&larr;</button><button type="button" id="calNow" class="text small">Today</button><button type="button" id="calNext" class="step" aria-label="Month after">&rarr;</button></div>
+      </header>
+      <table id="cal" class="cal"></table>
+    </section>
+
+    <section class="card" data-widget="zones" aria-labelledby="zones-title">
+      <h2 id="zones-title">World clocks</h2>
+      <ul id="zones" class="rows"></ul>
+      <form id="zoneForm" autocomplete="off"><label class="sr" for="zoneText">Add a place</label><input id="zoneText" type="text" list="zoneList" placeholder="Add a place: Tokyo, London, New York"><datalist id="zoneList"></datalist></form>
+      <p id="zoneSaid" class="said" role="status"></p>
+    </section>
+  </div>
+</main>
+
+<!-- The only way into the page's settings: one square, bottom right. -->
+<button type="button" id="customise" class="square" aria-label="Customise this page" title="Customise this page" aria-expanded="false" aria-controls="panel">
+  <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="2.500" width="5.500" height="5.500" rx="1.500"/><rect x="10" y="2.500" width="5.500" height="5.500" rx="1.500"/><rect x="2.500" y="10" width="5.500" height="5.500" rx="1.500"/><rect x="10" y="10" width="5.500" height="5.500" rx="1.500"/></svg>
+</button>
+
+<aside id="panel" class="panel" aria-label="Customise this page" tabindex="-1" hidden>
+  <header>
+    <h2>Customise</h2>
+    <button type="button" id="panelClose" class="quiet" aria-label="Close">Close</button>
+  </header>
+
+  <!-- Fifteen switches in three groups: what sits at the top, the cards, and how they are laid out. -->
+  <h3>At the top</h3>
+  <ul id="switchesTop" class="switches"></ul>
+  <h3>Cards</h3>
+  <ul id="switches" class="switches"></ul>
+  <h3>Layout</h3>
+  <ul class="switches"><li><label title="Off: cards keep strictly to your order."><span>Fill empty space</span><input type="checkbox" role="switch" id="packCards"><small>Cards slide up into gaps.</small></label></li></ul>
+  <p class="hint" title="Drag a card by its title to move it, by its lower right corner to resize it.">Drag cards to move or resize them. <button type="button" id="resetLayout" class="text">Put them back</button></p>
+
+  <h3>Background</h3>
+  <div class="backs" role="radiogroup" aria-label="Background">
+    <label><input type="radio" name="backdrop" value="moon"><span class="swatch moon"></span>Moonlight</label>
+    <label><input type="radio" name="backdrop" value="plain"><span class="swatch plain"></span>Plain</label>
+    <label><input type="radio" name="backdrop" value="picture"><span class="swatch picture" id="pictureSwatch"></span>Picture</label>
+  </div>
+  <div class="acts">
+    <button type="button" id="pickPicture" class="quiet">Choose a picture</button>
+    <button type="button" id="dropPicture" class="quiet" hidden>Remove it</button>
+    <input type="file" id="pictureFile" accept="image/*" hidden>
+  </div>
+  <p id="pictureSaid" class="said" role="status"></p>
+
+  <h3>Greeting and clock</h3>
+  <label class="field">Your name <input id="name" type="text" maxlength="30" placeholder="Optional" autocomplete="off"></label>
+  <div class="seg" role="radiogroup" aria-label="Clock">
+    <label><input type="radio" name="clock" value="auto">As this computer</label>
+    <label><input type="radio" name="clock" value="12">12-hour</label>
+    <label><input type="radio" name="clock" value="24">24-hour</label>
+  </div>
+  <div class="seg" role="radiogroup" aria-label="Clock size">
+    <label><input type="radio" name="clockSize" value="large">Large</label>
+    <label><input type="radio" name="clockSize" value="line">In the date line</label>
+  </div>
+
+  <footer>
+    <button type="button" id="openLook" class="quiet">Colours and theme</button>
+    <button type="button" id="reset" class="quiet">Reset this page</button>
+  </footer>
+</aside>
+
+<script type="module" src="boot.js"></script>
+</body>
+</html>

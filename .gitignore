@@ -1,0 +1,45 @@
+# Build output
+target/
+node_modules/
+__pycache__/
+*.pyc
+
+# Logs and captures
+*.log
+*.keylog
+keys.log
+*.pcap
+*.pcapng
+*.har
+
+# Secrets and per-machine data: never commit these
+*.pem
+*.key
+.env
+.env.*
+scope.txt
+policies-applied.txt
+native-host.json
+bridges/
+
+# Things Brave or Windows write next to our files
+Cached Theme.pak
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Editor folders
+.vscode/
+.idea/
+
+# Working notes of the people and AI sessions building Gamblium: kept on
+# the machine, not published (owner, Nov 12 2026)
+CLAUDE.md
+TASK.md
+.claude/
+
+# Notes left by review and QA sessions
+BUGS.md
+TODO.md
+.pi/
+qa-escape-test.json

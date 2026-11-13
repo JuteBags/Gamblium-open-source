@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1044.5 192" role="img" aria-label="Gamblium">
+  <path d="M 69.75 10.35 L 69.75 78.00 L 7.20 78.00 Z" fill="#EE8FA1"/>
+  <path d="M 75.75 10.35 L 138.30 78.00 L 75.75 78.00 Z" fill="#C8325C"/>
+  <path d="M 4.80 84.00 L 69.75 84.00 L 69.75 179.25 Z" fill="#8C1C3A"/>
+  <path d="M 75.75 84.00 L 140.70 84.00 L 75.75 179.25 Z" fill="#DDE0E8"/>
+  <path d="M 313.50 96.00 A 64.00 64.00 0 1 1 295.54 51.54" fill="none" stroke="#DDE0E8" stroke-width="20.00"/>
+  <rect x="252.50" y="96.00" width="71.00" height="20.00" fill="#DDE0E8"/>
+  <circle cx="388.50" cy="122.00" r="38.00" fill="none" stroke="#DDE0E8" stroke-width="20.00"/>
+  <rect x="416.50" y="74.00" width="20.00" height="96.00" fill="#DDE0E8"/>
+  <rect x="453.50" y="74.00" width="20.00" height="96.00" fill="#DDE0E8"/>
+  <path d="M 463.50 115.00 A 31.00 31.00 0 0 1 525.50 115.00" fill="none" stroke="#DDE0E8" stroke-width="20.00"/>
+  <rect x="515.50" y="115.00" width="20.00" height="55.00" fill="#DDE0E8"/>
+  <path d="M 525.50 115.00 A 31.00 31.00 0 0 1 587.50 115.00" fill="none" stroke="#DDE0E8" stroke-width="20.00"/>
+  <rect x="577.50" y="115.00" width="20.00" height="55.00" fill="#DDE0E8"/>
+  <rect x="614.50" y="22.00" width="20.00" height="148.00" fill="#DDE0E8"/>
+  <circle cx="662.50" cy="122.00" r="38.00" fill="none" stroke="#DDE0E8" stroke-width="20.00"/>
+  <rect x="727.50" y="22.00" width="20.00" height="148.00" fill="#DDE0E8"/>
+  <rect x="764.50" y="74.00" width="20.00" height="96.00" fill="#DDE0E8"/>
+  <circle cx="774.50" cy="47.00" r="14.00" fill="#EE8FA1"/>
+  <rect x="801.50" y="74.00" width="20.00" height="55.00" fill="#DDE0E8"/>
+  <path d="M 873.50 129.00 A 31.00 31.00 0 0 1 811.50 129.00" fill="none" stroke="#DDE0E8" stroke-width="20.00"/>
+  <rect x="863.50" y="74.00" width="20.00" height="96.00" fill="#DDE0E8"/>
+  <rect x="900.50" y="74.00" width="20.00" height="96.00" fill="#DDE0E8"/>
+  <path d="M 910.50 115.00 A 31.00 31.00 0 0 1 972.50 115.00" fill="none" stroke="#DDE0E8" stroke-width="20.00"/>
+  <rect x="962.50" y="115.00" width="20.00" height="55.00" fill="#DDE0E8"/>
+  <path d="M 972.50 115.00 A 31.00 31.00 0 0 1 1034.50 115.00" fill="none" stroke="#DDE0E8" stroke-width="20.00"/>
+  <rect x="1024.50" y="115.00" width="20.00" height="55.00" fill="#DDE0E8"/>
+</svg>

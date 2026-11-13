@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark light">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Downloads · Gamblium</title>
+<link rel="icon" href="icons/icon-32.png">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+<script src="scheme.js"></script>
+<script src="../content/menu.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <img class="mark" alt="" width="22" height="22">
+  <span class="product">Gamblium</span>
+  <nav aria-label="Gamblium pages">
+    <a href="dashboard.html">Tabs and memory</a>
+    <span class="navhead">Library</span>
+    <a class="sub" href="history.html">History</a>
+    <a class="sub" href="downloads.html" aria-current="page">Downloads</a>
+    <a class="sub" href="sessions.html">Sessions</a>
+    <a href="security.html">Security</a>
+    <a href="settings.html">Settings</a>
+  </nav>
+</header>
+
+<main class="page">
+  <div class="title">
+    <div class="titlerow">
+      <h1>Downloads</h1>
+      <!-- How downloads are handled (folder sorting, the downloader) is set once: behind one small icon, not on the page. -->
+      <button type="button" class="iconlink" id="dlGear" aria-expanded="false" aria-controls="dlSettings" title="Download settings" aria-label="Download settings"><svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M6.9 1.6h2.2l.4 1.8 1.3.7 1.7-.7 1.1 1.9-1.3 1.2v1.5l1.3 1.2-1.1 1.9-1.7-.7-1.3.7-.4 1.8H6.9l-.4-1.8-1.3-.7-1.7.7-1.1-1.9 1.3-1.2V6.5L2.4 5.3l1.1-1.9 1.7.7 1.3-.7z"/><circle cx="8" cy="8" r="2"/></svg></button>
+    </div>
+    <p id="line">Reading…</p>
+  </div>
+
+  <section class="panel dlsettings" id="dlSettings" aria-labelledby="dlSettingsTitle" hidden>
+    <header>
+      <h2 id="dlSettingsTitle">Download settings</h2>
+      <button type="button" class="quiet" id="dlSettingsClose" aria-label="Close download settings">Close</button>
+    </header>
+    <h3 class="subhead" id="rules-title">Sort into folders</h3>
+    <div class="row foldbar">
+      <label class="check"><input type="checkbox" id="routing"> Sort new downloads into folders</label>
+      <span id="rulesSaved" class="saved" role="status"></span>
+    </div>
+    <p class="lead small">The first matching rule wins. Folders are made inside your download folder.</p>
+    <div id="rulesError" class="notice bad" style="margin-bottom: 12px" hidden></div>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col" style="width: 22%">Folder</th>
+            <th scope="col">File types</th>
+            <th scope="col" style="width: 28%">Only from these sites</th>
+            <th scope="col" class="fit"><span class="sr">Remove</span></th>
+          </tr>
+        </thead>
+        <tbody id="rules"></tbody>
+      </table>
+    </div>
+    <div class="row" style="margin-top: 12px">
+      <button type="button" id="addRule">Add a rule</button>
+      <button type="button" id="resetRules" class="quiet">Back to the built-in rules</button>
+    </div>
+    <p class="lead small" style="margin: 16px 0 0">Gamblium's downloader, the save folder and torrents: <a href="settings.html#downloads">Settings › Downloads</a></p>
+  </section>
+
+
+  <!-- Gamblium's own downloader: shown only while it has jobs, above the files so a running job is never below a long list. What it is and when it takes over lives in Settings. -->
+  <section class="panel fast" id="fast" aria-labelledby="fast-title" style="margin-bottom: 16px" hidden>
+    <header><h2 id="fast-title">Gamblium downloader</h2></header>
+    <div id="fastSaid" class="notice" role="status" hidden></div>
+    <ul id="jobs" class="jobs"></ul>
+  </section>
+
+  <section class="panel" aria-labelledby="list-title">
+    <header>
+      <h2 id="list-title">Files</h2>
+      <form id="startForm" class="row" autocomplete="off">
+        <label class="sr" for="url">Address of a file to download</label>
+        <input type="text" id="url" inputmode="url" spellcheck="false" placeholder="Paste a file's address or a magnet link" style="width: 320px">
+        <button type="submit" class="primary">Download</button>
+      </form>
+    </header>
+    <div class="toolbar">
+      <input id="dq" type="search" placeholder="Search by name or address" aria-label="Search downloads" autocomplete="off" spellcheck="false">
+      <div id="whens" class="seg" role="group" aria-label="When"></div>
+    </div>
+    <div id="kinds" class="seg kinds" role="group" aria-label="Kind of file"></div>
+    <div id="said" class="notice" role="status" style="margin-bottom: 12px" hidden></div>
+    <p id="none" class="empty" hidden>Nothing has been downloaded in this profile yet.</p>
+    <p id="nomatch" class="empty" hidden>No download matches those filters.</p>
+    <div class="tablewrap">
+      <table id="table" hidden>
+        <thead>
+          <tr>
+            <th scope="col">File</th>
+            <th scope="col">Status</th>
+            <th scope="col" class="num">Size</th>
+            <th scope="col" class="fit">Started</th>
+            <th scope="col" class="fit"><span class="sr">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+
+</main>
+
+<script type="module" src="downloads.js"></script>
+</body>
+</html>

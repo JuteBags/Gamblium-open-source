@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark light">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sessions · Gamblium</title>
+<link rel="icon" href="icons/icon-32.png">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+<script src="scheme.js"></script>
+<script src="../content/menu.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <img class="mark" alt="" width="22" height="22">
+  <span class="product">Gamblium</span>
+  <nav aria-label="Gamblium pages">
+    <a href="dashboard.html">Tabs and memory</a>
+    <span class="navhead">Library</span>
+    <a class="sub" href="history.html">History</a>
+    <a class="sub" href="downloads.html">Downloads</a>
+    <a class="sub" href="sessions.html" aria-current="page">Sessions</a>
+    <a href="security.html">Security</a>
+    <a href="settings.html">Settings</a>
+  </nav>
+</header>
+
+<main class="page sessions">
+  <div class="title">
+    <div class="titlerow">
+      <h1>Sessions</h1>
+      <button type="button" class="iconlink" id="sGear" aria-expanded="false" aria-controls="sSettings" title="Session settings" aria-label="Session settings"><svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M6.9 1.6h2.2l.4 1.8 1.3.7 1.7-.7 1.1 1.9-1.3 1.2v1.5l1.3 1.2-1.1 1.9-1.7-.7-1.3.7-.4 1.8H6.9l-.4-1.8-1.3-.7-1.7.7-1.1-1.9 1.3-1.2V6.5L2.4 5.3l1.1-1.9 1.7.7 1.3-.7z"/><circle cx="8" cy="8" r="2"/></svg></button>
+    </div>
+  </div>
+  <!-- Set once or read once: behind the icon by the title (Rule 11). -->
+  <section class="panel dlsettings" id="sSettings" aria-labelledby="sSettingsTitle" hidden>
+    <header>
+      <h2 id="sSettingsTitle">Session settings</h2>
+      <button type="button" class="quiet" id="sSettingsClose" aria-label="Close session settings">Close</button>
+    </header>
+    <label class="check"><input type="checkbox" id="withPages" checked> Keep scroll position and typed form text</label>
+    <div class="row" style="margin-top: 12px">
+      <label class="sr" for="file">Session file</label>
+      <input type="file" id="file" accept="application/json,.json" hidden>
+      <button type="button" id="importBtn">Import tabs from a file</button>
+    </div>
+    <details class="keeps">
+      <summary>What putting tabs away keeps, and what it cannot</summary>
+      <div class="keepgrid">
+        <div>
+          <h3>Kept</h3>
+          <p>Each window with its place and size. Every tab in order with its address, pin, group, mute and zoom. Scroll position and the text typed into forms, if you leave that on. Gamblium's settings as they were.</p>
+        </div>
+        <div>
+          <h3>Not kept</h3>
+          <p>What lives only in a page's memory: an unsaved document in an editor, a game in progress. A tab's Back and Forward history. Passwords and card numbers.</p>
+        </div>
+        <div>
+          <h3>Files</h3>
+          <p>An exported set of tabs opens in another profile or on another computer. The file holds page addresses and any form text that was kept, so treat it as private.</p>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <div id="said" class="notice" role="status" hidden></div>
+
+  <section class="panel named" id="named" aria-labelledby="named-title" hidden>
+    <header>
+      <h2 id="named-title" title="Each one is a browser of its own: logins, extensions and proxy stay in it.">Named sessions <span id="namedCount" class="n num"></span></h2>
+    </header>
+    <div id="namedSaid" class="notice" role="status" hidden></div>
+    <div class="namedtools" id="namedTools" hidden>
+      <input id="nq" type="search" placeholder="Find a session" aria-label="Find a session by name" autocomplete="off" spellcheck="false">
+      <div class="picked" id="namedPicked" role="group" aria-label="Selected sessions" hidden></div>
+    </div>
+    <ul id="namedRows" class="namedlist"></ul>
+    <p id="namedNomatch" class="empty" hidden>No session has a name like that.</p>
+    <p id="namedNone" class="empty" hidden title="Or from a terminal: gamblium-cli create <name>">No sessions yet.</p>
+    <form id="namedForm" class="namedform" autocomplete="off">
+      <label class="sr" for="namedName">Name for a new session</label>
+      <input type="text" id="namedName" maxlength="40" spellcheck="false" placeholder="New session: a name, e.g. research">
+      <label class="sr" for="namedProxy">Its proxy, if any</label>
+      <input type="text" id="namedProxy" spellcheck="false" placeholder="Proxy: socks5://127.0.0.1:9050" hidden>
+      <button type="button" class="textlink" id="namedProxyShow" aria-controls="namedProxy" aria-expanded="false">Proxy…</button>
+      <button type="submit" class="primary" id="namedOpen">Create and open</button>
+      <button type="submit" class="textlink" id="namedHidden" title="Create it and keep it running with no window">without a window</button>
+    </form>
+  </section>
+
+  <section class="panel now" aria-labelledby="now-title">
+    <div class="nowmain">
+      <header>
+        <h2 id="now-title">Open now</h2>
+        <p id="nowLine" class="lead num"></p>
+      </header>
+      <ul id="nowWins" class="wins" aria-label="Your open windows, one row each"></ul>
+      <p id="nowNone" class="empty" hidden>Nothing here can be saved: only browser pages are open.</p>
+    </div>
+    <form id="saveForm" class="saveform" autocomplete="off">
+      <div class="savebar">
+        <label class="sr" for="name">Name for these tabs</label>
+        <input type="text" id="name" maxlength="60" spellcheck="false" placeholder="Name for these tabs">
+        <div class="seg" role="group" aria-label="What to save">
+          <button type="button" data-scope="all" aria-pressed="true">Every window</button>
+          <button type="button" data-scope="window" aria-pressed="false">Only this window</button>
+        </div>
+        <button type="submit" class="primary" id="saveKeep">Save these tabs</button>
+        <button type="submit" id="saveClose" title="Closing them gives their memory back; one empty window stays open.">Save and close</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="panel sesspanel" aria-labelledby="list-title">
+    <header>
+      <h2 id="list-title">Tabs put away <span id="count" class="n num"></span></h2>
+      <div class="row">
+        <input id="sq" type="search" placeholder="Find a tab: an address, a title, a name" aria-label="Find in tabs put away" autocomplete="off" spellcheck="false" hidden>
+      </div>
+    </header>
+    <p id="none" class="empty" hidden>Nothing put away yet.</p>
+    <p id="nomatch" class="empty" hidden>Nothing put away holds a tab like that.</p>
+    <p id="foundLine" class="lead num" hidden></p>
+    <ul id="rows" class="sesslist"></ul>
+  </section>
+
+</main>
+
+<script type="module" src="sessions.js"></script>
+</body>
+</html>

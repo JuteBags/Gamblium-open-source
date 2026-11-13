@@ -1,0 +1,424 @@
+/* Gamblium new tab. One column: hello and time, search, quick access; under
+   it a deck of small panels the user chooses. Glass on the scheme's ground,
+   lit from above. Nothing moves by itself: transitions on hover, focus and
+   the two things that open (the search list and the customise panel) only.
+   Nothing from the network. Colours come from ../ui/tokens.css. */
+* { box-sizing: border-box; }
+:root {
+  --card: color-mix(in srgb, var(--text) 6%, transparent);
+  --nested: color-mix(in srgb, var(--text) 11%, transparent);
+  --rim: color-mix(in srgb, var(--text) 13%, transparent);
+  --meta: color-mix(in srgb, var(--text) 58%, var(--bg));
+  --sheen: linear-gradient(180deg, color-mix(in srgb, var(--text) 9%, transparent), color-mix(in srgb, var(--text) 2%, transparent) 62%);
+  --sheen-2: linear-gradient(180deg, color-mix(in srgb, var(--text) 15%, transparent), color-mix(in srgb, var(--text) 5%, transparent) 70%);
+  --depth-1: inset 0 1px 0 color-mix(in srgb, var(--text) 22%, transparent), inset 0 0 0 1px var(--rim), 0 22px 40px -26px rgb(0 0 0 / 0.95);
+  --depth-2: inset 0 1px 0 color-mix(in srgb, var(--text) 32%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent), 0 34px 70px -24px rgb(0 0 0), 0 0 70px -18px color-mix(in srgb, var(--text) 20%, transparent);
+  --blur: blur(22px) saturate(150%);
+  --r-card: 18px;
+  --r-control: 12px;
+  --quick: 120ms ease-out;
+  --open: 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  --col: 760px;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --card: color-mix(in srgb, #fff 58%, transparent);
+    --nested: color-mix(in srgb, var(--text) 7%, transparent);
+    --meta: color-mix(in srgb, var(--text) 66%, var(--bg));
+    --sheen: linear-gradient(180deg, rgb(255 255 255 / 0.8), rgb(255 255 255 / 0.4));
+    --sheen-2: linear-gradient(180deg, rgb(255 255 255 / 0.95), rgb(255 255 255 / 0.6));
+    --depth-1: inset 0 1px 0 rgb(255 255 255 / 0.9), inset 0 0 0 1px var(--rim), 0 18px 34px -24px rgb(20 24 34 / 0.35);
+    --depth-2: inset 0 1px 0 #fff, inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent), 0 30px 60px -28px rgb(20 24 34 / 0.5);
+  }
+}
+html { background: var(--bg); scrollbar-color: color-mix(in srgb, var(--text) 24%, transparent) transparent; }
+body {
+  position: relative;
+  isolation: isolate;
+  margin: 0;
+  min-height: 100vh;
+  padding-bottom: 76px;
+  font: 14px/1.45 var(--font-ui);
+  color: var(--text);
+  background: var(--bg);
+}
+/* No blur behind the glass on the plain grounds: blurring soft gradients changes nothing you can see,
+   and every blurred box is a layer the graphics process redraws in tiles (owner, Nov 13 2026: seam
+   lines through the search box and cards while typing and on hover). Over the user's own picture the
+   frosting is worth it. */
+[data-backdrop="picture"] .search, [data-backdrop="picture"] .chip, [data-backdrop="picture"] .card,
+[data-backdrop="picture"] .pinform, [data-backdrop="picture"] .square { -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
+/* The ground. Three pools of moonlight, a plain ground, or the user's picture under a veil. */
+body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+[data-backdrop="moon"] body::before {
+  background:
+    radial-gradient(900px 560px at 50% -4%, color-mix(in srgb, var(--text) 17%, transparent), transparent 66%),
+    radial-gradient(640px 460px at 6% 100%, color-mix(in srgb, var(--highlight) 16%, transparent), transparent 70%),
+    radial-gradient(520px 380px at 96% 78%, color-mix(in srgb, var(--text) 7%, transparent), transparent 72%);
+}
+[data-backdrop="picture"] body::before {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg) 62%, transparent), color-mix(in srgb, var(--bg) 78%, transparent)),
+    var(--picture) center / cover no-repeat;
+}
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+[hidden] { display: none !important; }
+h2, h3, p, ul, dl, dd { margin: 0; padding: 0; }
+ul { list-style: none; }
+button, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+/* What the user switched off is not there at all. */
+[data-hide~="clock"] [data-widget="clock"], [data-hide~="pins"] [data-widget="pins"], [data-hide~="top"] [data-widget="top"],
+[data-hide~="closed"] [data-widget="closed"], [data-hide~="status"] [data-widget="status"], [data-hide~="sessions"] [data-widget="sessions"],
+[data-hide~="downloads"] [data-widget="downloads"], [data-hide~="notes"] [data-widget="notes"], [data-hide~="todo"] [data-widget="todo"],
+[data-hide~="playing"] [data-widget="playing"], [data-hide~="heavy"] [data-widget="heavy"], [data-hide~="recent"] [data-widget="recent"],
+[data-hide~="marks"] [data-widget="marks"], [data-hide~="calendar"] [data-widget="calendar"], [data-hide~="zones"] [data-widget="zones"] { display: none; }
+
+.top { padding: 22px 29px 0; }
+.brand { margin: 0; line-height: 0; }
+.brand img { display: block; height: 28px; width: auto; content: var(--lockup); }
+
+main { width: min(100% - 32px, 1120px); margin: 0 auto; padding-top: clamp(20px, 9vh, 104px); }
+.hero, .finder, .quick { width: min(100%, var(--col)); margin-inline: auto; }
+[data-hide~="clock"] main { padding-top: clamp(24px, 14vh, 160px); }
+
+/* Hello and time share the column's two edges. */
+.hero { min-height: 76px; padding: 0 6px 26px; }
+.hello { font: 600 44px/48px var(--font-display); letter-spacing: -0.025em; text-wrap: balance; }
+.date { margin-top: 8px; font-size: 15px; color: var(--meta); font-variant-numeric: tabular-nums; }
+.date .time { color: var(--text); white-space: nowrap; }
+.date .time small { margin-left: 3px; font: inherit; color: var(--meta); }
+.date .time:empty, .date .time:empty ~ .dot, .date .dot:has(+ .time:empty) { display: none; }
+/* Large clock (the default): the time beside the greeting at display size, as before #128. */
+.hero[data-clock="large"] { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
+.hero[data-clock="large"] .dot { display: none; }
+.hero[data-clock="large"] > .time { font: 300 68px/60px var(--font-display); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text); }
+.hero[data-clock="large"] > .time small { margin-left: 8px; font: 400 18px/1 var(--font-ui); letter-spacing: 0; color: var(--meta); }
+@media (max-width: 760px) { .hero[data-clock="large"] > .time { font-size: 44px; line-height: 40px; } }
+
+/* The search is the nearest thing on the page. */
+.finder { position: relative; z-index: 3; }
+.search {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 60px;
+  padding: 0 22px;
+  border-radius: 999px;
+  background-image: var(--sheen-2);
+  box-shadow: var(--depth-2);
+  transition: box-shadow var(--quick);
+}
+.search:focus-within { box-shadow: var(--depth-2), 0 0 0 2px color-mix(in srgb, var(--text) 55%, transparent); }
+.search svg { flex: none; color: var(--meta); }
+.search input[type="text"] { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; border-radius: 0; outline: 0; background: transparent; box-shadow: none; font: 17px/1 var(--font-ui); }
+/* While typing, the field stays part of the pill: no box of its own inside the rounded ends.
+   (The general rule for a focused text field further down would otherwise draw one.) */
+.search input[type="text"]:focus { background: transparent; box-shadow: none; }
+.search input::placeholder { color: var(--meta); opacity: 1; }
+.search button { flex: none; height: 42px; padding: 0 20px; border: 0; border-radius: 999px; background: var(--text); color: var(--bg); font: 600 14px/1 var(--font-ui); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5); }
+.search button:hover { background: color-mix(in srgb, var(--text) 86%, var(--bg)); }
+
+/* What the search offers while you type. It pops up, so it sits highest. */
+.suggest {
+  position: absolute;
+  inset: calc(100% + 4px) 0 auto 0;
+  padding: 8px;
+  border-radius: 26px;
+  /* A solid panel: nothing of the page shows through, so it reads as above the page. */
+  background-color: var(--surface-raised, var(--surface));
+  background-image: var(--sheen-2);
+  box-shadow: var(--depth-2), 0 60px 90px -30px rgb(0 0 0);
+  animation: drop var(--open);
+}
+@keyframes drop { from { opacity: 0; transform: translateY(-6px); } }
+.suggest li { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 12px; height: 44px; padding: 0 14px; border-radius: 18px; cursor: pointer; }
+/* Hover: a light fill only. The row Enter opens: a fill and the facet light down its left edge. */
+.suggest li { position: relative; }
+.suggest li:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.suggest li[aria-selected="true"] { background: color-mix(in srgb, var(--text) 11%, transparent); }
+.suggest li[aria-selected="true"]::before { content: ""; position: absolute; left: 3px; top: 11px; bottom: 11px; width: 3px; border-radius: 2px; background: var(--highlight); }
+.suggest img, .suggest svg { width: 16px; height: 16px; justify-self: center; border-radius: 4px; color: var(--meta); }
+.suggest .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.suggest .what small { margin-left: 8px; font-size: 13px; color: var(--meta); }
+.suggest .kind { font-size: 12px; color: var(--meta); }
+
+/* Quick access: the user's own tiles. */
+.quick { margin-top: 34px; }
+.quick h2, .card h2 { font: 400 13px/18px var(--font-ui); color: var(--meta); }
+.quick h2 { padding: 0 6px 10px; }
+.tiles { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); row-gap: 6px; }
+.tile { position: relative; }
+.tile a, .tile .add { display: grid; justify-items: center; gap: 8px; width: 100%; padding: 8px 4px; border: 0; border-radius: var(--r-card); background: none; color: inherit; text-decoration: none; }
+.chip { width: 56px; height: 56px; display: grid; place-items: center; border-radius: var(--r-card); background-image: var(--sheen); box-shadow: var(--depth-1); transition: transform var(--quick), background-color var(--quick); }
+.chip img { display: block; width: 24px; height: 24px; border-radius: 6px; }
+.chip svg { color: var(--meta); }
+.chip .sitemark { display: block; }
+.chip .sitemark.plain { color: var(--text); }
+.chip .letter { font: 600 20px/1 var(--font-display); color: var(--text); }
+.name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; color: var(--text-muted); }
+.tile a:hover .chip, .tile .add:hover .chip { background-color: var(--nested); transform: translateY(-2px); }
+.tile a:hover .name, .tile a:focus-visible .name, .tile .add:hover .name { color: var(--text); }
+.tile a:focus-visible, .tile .add:focus-visible { outline: 0; }
+.tile a:focus-visible .chip, .tile .add:focus-visible .chip { outline: 2px solid var(--text); outline-offset: 2px; }
+.tile .add .chip { background-image: none; box-shadow: inset 0 0 0 1px var(--rim); }
+.tile.over .chip { outline: 2px solid var(--text); outline-offset: 2px; }
+.tile.dragging { opacity: 0.4; }
+/* Edit: a small curved button on the tile's corner, there on hover and on focus. */
+.tile .edit { position: absolute; top: 2px; right: calc(50% - 38px); width: 22px; height: 22px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 8px; background: var(--bg); box-shadow: inset 0 0 0 1px var(--rim), 0 6px 14px -6px rgb(0 0 0); color: var(--text-muted); opacity: 0; transition: opacity var(--quick); }
+.tile:hover .edit, .tile .edit:focus-visible { opacity: 1; }
+.tile .edit:hover { color: var(--text); }
+.invite { padding: 2px 6px 0; color: var(--meta); }
+
+/* Buttons and fields, one shape. */
+.primary, .quiet { height: 34px; padding: 0 14px; border: 0; border-radius: 999px; font: 600 13px/1 var(--font-ui); white-space: nowrap; }
+.primary { background: var(--text); color: var(--bg); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5); }
+.primary:hover { background: color-mix(in srgb, var(--text) 86%, var(--bg)); }
+.quiet { background: var(--card); box-shadow: inset 0 0 0 1px var(--rim); font-weight: 400; color: var(--text); }
+.quiet:hover { background: var(--nested); }
+.quiet.danger { color: var(--danger); }
+button:disabled { opacity: 0.45; cursor: default; }
+.text { padding: 0; border: 0; background: none; color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+.acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.said { min-height: 18px; font-size: 13px; color: var(--meta); }
+input[type="text"], textarea { width: 100%; border: 0; border-radius: var(--r-control); background: var(--card); box-shadow: inset 0 0 0 1px var(--rim); outline: 0; }
+input[type="text"] { height: 38px; padding: 0 12px; }
+input[type="text"]:focus, textarea:focus { background: var(--nested); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 60%, transparent); }
+input::placeholder, textarea::placeholder { color: var(--meta); opacity: 1; }
+
+.pinform { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 12px; margin-top: 12px; padding: 16px; border-radius: var(--r-card); background-image: var(--sheen); box-shadow: var(--depth-1); }
+.pinform label { display: grid; gap: 6px; font-size: 13px; color: var(--meta); }
+.field { display: grid; font-size: 13px; color: var(--meta); }
+.pinform .acts, .pinform .said { grid-column: 1 / -1; }
+.pinform .said:empty { display: none; }
+
+/* The deck: panels the user chose, as many columns as fit. */
+.deck { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-top: 38px; }
+.card { min-height: 236px; padding: 16px 10px 10px; border-radius: var(--r-card); background-image: var(--sheen); box-shadow: var(--depth-1); }
+.card h2 { padding: 0 8px 10px; }
+.card .empty { padding: 4px 8px; color: var(--meta); }
+/* A card with nothing in it is one line, not a box of empty space. It stays where the
+   person put it: the page never reorders their cards (interaction spec, New Tab). */
+.card:has(> .empty:not([hidden])) { min-height: 0; align-self: start; padding-bottom: 12px; }
+.card:has(> .empty:not([hidden])) h2 { padding-bottom: 4px; }
+.rows li { position: relative; }
+.rows a, .rows .row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; height: 38px; padding: 0 8px; border: 0; border-radius: var(--r-control); background: none; color: inherit; text-align: left; text-decoration: none; }
+.rows a:hover, .rows .row:hover, .rows li:focus-within > a { background: var(--nested); }
+.rows img, .rows svg { width: 16px; height: 16px; border-radius: 4px; color: var(--meta); }
+.rows .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rows .meta { font-size: 12px; color: var(--meta); font-variant-numeric: tabular-nums; }
+.rows .pin { position: absolute; right: 6px; top: 6px; height: 26px; padding: 0 10px; border: 0; border-radius: 999px; background: var(--text); color: var(--bg); font: 600 12px/1 var(--font-ui); opacity: 0; }
+.rows li:hover .pin, .rows .pin:focus-visible { opacity: 1; }
+.rows li.pinnable:hover .meta, .rows li.pinnable:focus-within .meta { visibility: hidden; }
+
+.facts { display: grid; grid-template-columns: repeat(4, auto); justify-content: space-between; padding: 2px 8px 14px; }
+.facts dt { font-size: 12px; color: var(--meta); }
+.facts dd { font: 600 26px/32px var(--font-display); letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.meter { height: 8px; margin: 0 8px; border-radius: 999px; background: var(--nested); overflow: hidden; }
+.meter span { display: block; height: 100%; width: 0; border-radius: 999px; background: var(--text); }
+.card > .meta { padding: 8px 8px 14px; font-size: 12px; color: var(--meta); font-variant-numeric: tabular-nums; }
+.card > .acts { padding: 0 8px 6px; }
+.card textarea { display: block; min-height: 176px; margin: 0 6px 4px; width: calc(100% - 12px); padding: 10px 12px; resize: vertical; line-height: 1.5; }
+
+/* The square, and the panel it opens. */
+.square { position: fixed; right: 20px; bottom: 20px; z-index: 6; width: 40px; height: 40px; padding: 0; display: grid; place-items: center; border: 0; border-radius: var(--r-control); background-color: color-mix(in srgb, var(--bg) 40%, transparent); background-image: var(--sheen); box-shadow: var(--depth-1); color: var(--text-muted); transition: color var(--quick), transform var(--quick); }
+.square:hover, .square[aria-expanded="true"] { color: var(--text); transform: translateY(-1px); }
+.panel {
+  position: fixed;
+  right: 20px;
+  bottom: 72px;
+  z-index: 6;
+  width: min(360px, 100vw - 40px);
+  max-height: calc(100vh - 92px);
+  overflow: auto;
+  scrollbar-width: thin;
+  outline: 0;
+  padding: 16px 16px 12px;
+  border-radius: 22px;
+  background-color: var(--bg);
+  background-image: var(--sheen-2);
+  box-shadow: var(--depth-2), 0 60px 90px -30px rgb(0 0 0);
+  transform-origin: 100% 100%;
+  animation: rise var(--open);
+}
+@keyframes rise { from { opacity: 0; transform: translateY(10px) scale(0.98); } }
+.panel header { display: flex; align-items: center; justify-content: space-between; padding-left: 8px; }
+.panel h2 { font: 600 18px/24px var(--font-display); }
+.panel h3 { margin: 12px 0 4px; padding: 0 8px; font: 400 12px/16px var(--font-ui); color: var(--meta); }
+.panel footer { display: flex; justify-content: space-between; gap: 8px; margin-top: 14px; padding-top: 12px; box-shadow: inset 0 1px 0 var(--rim); }
+.switches li { border-radius: var(--r-control); }
+.switches label { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0 12px; padding: 5px 8px; border-radius: var(--r-control); cursor: pointer; }
+.switches label:hover { background: var(--card); }
+.switches small { grid-column: 1; font-size: 12px; color: var(--meta); }
+.switches input { grid-column: 2; grid-row: 1 / span 2; appearance: none; width: 38px; height: 22px; margin: 0; border-radius: 999px; background: var(--nested); box-shadow: inset 0 0 0 1px var(--rim); cursor: pointer; position: relative; transition: background-color var(--quick); }
+.switches input::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 999px; background: var(--text-muted); transition: transform var(--quick), background-color var(--quick); }
+.switches input:checked { background: var(--text); }
+.switches input:checked::after { transform: translateX(16px); background: var(--bg); }
+.backs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 6px; }
+.panel > .acts, .panel > .said, .panel > .field { padding: 0 8px; }
+.panel > .said:empty { display: none; }
+.field { grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px; }
+.backs label { display: grid; gap: 6px; justify-items: center; padding: 8px 4px; border-radius: var(--r-control); font-size: 12px; color: var(--text-muted); cursor: pointer; }
+.backs label:hover { background: var(--card); }
+.backs input { position: absolute; opacity: 0; pointer-events: none; }
+.backs .swatch { width: 100%; height: 40px; border-radius: 10px; background-color: var(--bg); box-shadow: inset 0 0 0 1px var(--rim); background-size: cover; background-position: center; }
+.backs .swatch.moon { background-image: radial-gradient(70px 40px at 50% 0, color-mix(in srgb, var(--text) 34%, transparent), transparent 70%), radial-gradient(50px 34px at 0 100%, color-mix(in srgb, var(--highlight) 40%, transparent), transparent 70%); }
+.backs .swatch.picture { background-image: var(--picture, linear-gradient(135deg, var(--nested), transparent)); }
+.backs label:has(input:checked) { color: var(--text); }
+.backs label:has(input:checked) .swatch { box-shadow: 0 0 0 2px var(--text); }
+.backs label:has(input:focus-visible) .swatch { outline: 2px solid var(--text); outline-offset: 3px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+@media (max-width: 720px) {
+  .top { padding: 16px 16px 0; }
+  .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .hello { font-size: 30px; line-height: 36px; }
+  .pinform { grid-template-columns: 1fr; }
+  .deck { grid-template-columns: 1fr; }
+}
+
+/* ==== More panels: to do, playing now, heaviest tabs, calendar, world clocks ==== */
+.card > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-right: 8px; }
+.text.small { font-size: 12px; color: var(--meta); }
+.text.small:hover { color: var(--text); }
+.rows .pin.show { opacity: 1; background: var(--nested); color: var(--text); box-shadow: inset 0 0 0 1px var(--rim); font-weight: 400; }
+.rows .pin.show:hover { background: var(--text); color: var(--bg); }
+.rows li.acts-on .meta { margin-right: 64px; }
+.card form { padding: 6px 6px 2px; }
+.card .said { padding: 4px 8px 0; }
+.card .said:empty { display: none; }
+
+.todo { max-height: 232px; overflow: auto; scrollbar-width: thin; }
+.todo li { display: grid; grid-template-columns: 18px minmax(0, 1fr) 24px; align-items: center; gap: 10px; min-height: 36px; padding: 4px 8px; border-radius: var(--r-control); }
+.todo li:hover { background: var(--nested); }
+.todo input[type="checkbox"] { appearance: none; width: 18px; height: 18px; margin: 0; border-radius: 6px; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--text) 45%, transparent); cursor: pointer; display: grid; place-items: center; }
+.todo input[type="checkbox"]:checked { background: var(--text); box-shadow: none; }
+.todo input[type="checkbox"]:checked::after { content: ""; width: 9px; height: 5px; border-left: 2px solid var(--bg); border-bottom: 2px solid var(--bg); transform: translateY(-1px) rotate(-45deg); }
+.todo label { overflow-wrap: anywhere; cursor: pointer; }
+.todo li.done label { color: var(--meta); text-decoration: line-through; }
+.todo .drop, .rows .drop { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--meta); font-size: 16px; line-height: 1; opacity: 0; }
+.todo li:hover .drop, .todo .drop:focus-visible, .rows li:hover .drop, .rows .drop:focus-visible { opacity: 1; }
+.drop:hover { background: var(--nested); color: var(--text); }
+.rows .drop { position: absolute; right: 6px; top: 7px; }
+
+.step { width: 26px; height: 26px; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--meta); }
+.step:hover { background: var(--nested); color: var(--text); }
+.cal { width: calc(100% - 12px); margin: 0 6px 4px; border-collapse: separate; border-spacing: 2px; table-layout: fixed; text-align: center; font-variant-numeric: tabular-nums; }
+.cal caption { padding: 0 2px 8px; text-align: left; font: 600 15px/20px var(--font-display); }
+.cal th { padding: 0 0 4px; font: 400 11px/16px var(--font-ui); color: var(--meta); }
+.cal td { height: 28px; border-radius: 9px; font-size: 13px; color: var(--text-muted); }
+.cal td.today { background: var(--text); color: var(--bg); font-weight: 600; }
+
+.rows .zone { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 12px; height: 42px; padding: 0 36px 0 8px; align-content: center; }
+.zone .where small { margin-left: 8px; font-size: 12px; color: var(--meta); }
+.zone .when { font: 600 18px/24px var(--font-display); font-variant-numeric: tabular-nums; }
+.zone .when small { margin-left: 4px; font: 400 11px/1 var(--font-ui); color: var(--meta); }
+
+/* Customise: a choice of three, as one curved bar. */
+.seg { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; margin: 10px 8px 0; padding: 3px; border-radius: var(--r-control); background: var(--card); box-shadow: inset 0 0 0 1px var(--rim); }
+.seg label { height: 30px; display: grid; place-items: center; border-radius: 9px; font-size: 12px; color: var(--text-muted); cursor: pointer; white-space: nowrap; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label:has(input:checked) { background: var(--text); color: var(--bg); font-weight: 600; }
+.seg label:has(input:focus-visible) { outline: 2px solid var(--text); outline-offset: 2px; }
+
+/* A pin whose site is already open carries a small light under its tile; asleep, the icon is dimmed. */
+.tile.open .chip { position: relative; }
+.tile.open .chip::after { content: ""; position: absolute; left: 50%; bottom: 6px; width: 14px; height: 3px; margin-left: -7px; border-radius: 999px; background: var(--text); }
+.tile.open.asleep .chip::after { background: color-mix(in srgb, var(--text) 40%, transparent); }
+.tile.open.asleep .chip img, .tile.open.asleep .chip .sitemark, .tile.open.asleep .chip .letter { opacity: 0.45; filter: grayscale(1); }
+
+/* ==== The frame around one of our own pages (address ends in "#/<route>") ==== */
+[data-route] body { padding: 0; overflow: hidden; }
+[data-route] body::before { content: none; }
+[data-route] body > :not(#shell) { display: none !important; }
+#shell { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: var(--bg); }
+
+/* ==== Cards can be moved (drag the title) and resized (drag the corner) ==== */
+.card { position: relative; }
+.deck { grid-auto-flow: row dense; } /* a small card later in the order fills a hole left beside a big one */
+.deck[data-pack="off"] { grid-auto-flow: row; }
+.card[data-w="2"] { grid-column: span 2; }
+.card[data-w="3"] { grid-column: 1 / -1; }
+.card[data-h="2"] { grid-row: span 2; min-height: 488px; }
+.card[data-h="2"] textarea { min-height: 428px; }
+.card h2 { cursor: grab; user-select: none; }
+.card.lifted { opacity: 0.35; }
+.card.sizing { outline: 2px solid var(--text); outline-offset: 2px; user-select: none; }
+.card.before::before, .card.after::before { content: ""; position: absolute; top: 10px; bottom: 10px; width: 4px; border-radius: 999px; background: var(--text); }
+.card.before::before { left: -10px; }
+.card.after::before { right: -10px; }
+.grip { position: absolute; right: 4px; bottom: 4px; width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 8px; background: none; color: var(--meta); cursor: nwse-resize; opacity: 0; touch-action: none; transition: opacity var(--quick), color var(--quick); }
+.card:hover .grip, .grip:focus-visible, .card.sizing .grip { opacity: 1; }
+.grip:hover, .grip:focus-visible { color: var(--text); }
+.grip:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+.panel .hint { margin: 6px 8px 0; font-size: 12px; line-height: 1.5; color: var(--meta); }
+@media (max-width: 720px) {
+  .card[data-w] { grid-column: auto; }
+  .grip { display: none; }
+}
+
+/* ---- Spaces: chips under the search. The space you are in wears the facet light as one
+   lit top edge; the others are quiet. Frozen tabs are counted so the switch is visibly cheap. */
+.spaces { width: min(100%, var(--col)); margin: 18px auto 0; padding: 0 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.spaces ul { display: contents; list-style: none; }
+.spaces li button {
+  position: relative; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px 0 12px;
+  border: 0; border-radius: var(--r-control); background: var(--card); color: var(--meta);
+  box-shadow: inset 0 0 0 1px var(--rim); font: 500 14px/1 var(--font-ui);
+  transition: color var(--quick), background-color var(--quick), transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.spaces li button:hover { color: var(--text); }
+.spaces li button:active { transform: translateY(1px); }
+.spaces li button:focus-visible { outline: 2px solid var(--highlight); outline-offset: 2px; }
+.spaces li button[aria-pressed="true"] { color: var(--text); background: var(--surface-raised, var(--card)); }
+.spaces li button[aria-pressed="true"]::before { content: ""; position: absolute; inset: 0 10px auto; height: 2px; border-radius: 0 0 2px 2px; background: var(--highlight); }
+.spaces .swatch { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.spaces .n { font-weight: 400; color: var(--meta); font-variant-numeric: tabular-nums; }
+.spaces .addspace { display: inline-grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: var(--r-control);
+  background: transparent; color: var(--meta); box-shadow: inset 0 0 0 1px var(--rim); transition: color var(--quick), background-color var(--quick); }
+.spaces .addspace:hover { color: var(--text); background: var(--card); }
+.spaces .addspace:focus-visible { outline: 2px solid var(--highlight); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .spaces li button { transition: none; } }
+
+/* ==== Review pass 1 (critique checklist, Nov 13 2026) ==== */
+/* Switches: on stays Brave's look (light track, dark knob); off is a clear track with an outline
+   and a muted knob, so the two never read alike. */
+.switches input:not(:checked) { background: transparent; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--text) 38%, transparent); }
+.switches input:not(:checked)::after { background: color-mix(in srgb, var(--text) 50%, transparent); }
+.switches input:focus-visible { outline: 2px solid var(--highlight); outline-offset: 2px; }
+
+/* A card whose only content is a field (To do, World clocks, Notes before anything is in them)
+   is as tall as the field, not a 236 px box around it. */
+.card[data-widget="todo"]:has(#todo:empty), .card[data-widget="zones"]:has(#zones:empty), .card[data-widget="notes"]:has(textarea:placeholder-shown) { min-height: 0; align-self: start; padding-bottom: 10px; }
+.card[data-widget="notes"]:not([data-h="2"]) textarea:placeholder-shown { min-height: 72px; }
+
+/* Heaviest tabs: the sleep action is a small icon on hover or focus; the memory figure steps aside. */
+.rows li.icon-on { position: relative; }
+.rows .rowicon { position: absolute; right: 6px; top: 6px; width: 26px; height: 26px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 8px; background: none; color: var(--meta); opacity: 0; }
+.rows li.icon-on:hover .rowicon, .rows .rowicon:focus-visible { opacity: 1; }
+.rows .rowicon:hover { background: var(--nested); color: var(--text); }
+.rows .rowicon:focus-visible { outline: 2px solid var(--highlight); outline-offset: 1px; }
+.rows li.icon-on:hover .meta, .rows li.icon-on:focus-within .meta { visibility: hidden; }
+
+/* The Customise button: brighter, so the only way into Customise can be found. */
+.square { color: color-mix(in srgb, var(--text) 70%, transparent); }
+
+/* Background choice: the chosen one carries a tick, not only a ring. */
+.backs label { position: relative; }
+.backs label:has(input:checked)::after { content: ""; position: absolute; top: 13px; right: 9px; width: 16px; height: 16px; border-radius: 50%; background: var(--text) no-repeat center / 10px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M2 5.2 4 7.2 8 3' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+
+/* Calendar arrows: 32 px to hit, not 26. */
+.step { width: 32px; height: 32px; }
+
+/* The pin form, adding: the most visited as one-click chips above the fields. */
+.pinoffers { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.pinoffers .offer { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px 0 10px; border: 0; border-radius: 999px; background: var(--nested); box-shadow: inset 0 0 0 1px var(--rim); color: var(--text); font: 400 13px/1 var(--font-ui); }
+.pinoffers .offer:hover { background: color-mix(in srgb, var(--text) 12%, transparent); }
+.pinoffers .offer:focus-visible { outline: 2px solid var(--highlight); outline-offset: 2px; }
+.pinoffers img { width: 16px; height: 16px; border-radius: 4px; }
+/* A favicon that would vanish on this surface sits on a small chip of the opposite tone. */
+img.rimmed { padding: 1px; border-radius: 4px; background: var(--text); box-sizing: border-box; }

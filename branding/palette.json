@@ -1,0 +1,284 @@
+{
+  "name": "Gamblium",
+  "version": 2,
+  "note": "Single source of colour. branding/make_icons.py reads this file and builds the icons, the wordmark, the page tokens (extension/ui/tokens.css) and the whole-browser theme presets (presets/theme-<scheme>-<dark|light>.json). Do not edit those outputs by hand.",
+  "default": "moon",
+  "schemes": {
+    "moon": {
+      "label": "Moonlight",
+      "idea": "Vanta black and moonlit grey: black glass surfaces, silver ink, one cool steel for what is frozen. No colour accent.",
+      "seed": "#8A8F9A",
+      "variant": 2,
+      "tint": "#0D0E10",
+      "color": {
+        "void": "#030304",
+        "coal": "#0D0E10",
+        "coal-raised": "#17181B",
+        "coal-line": "#2B2D33",
+        "moon": "#E4E6EB",
+        "moon-dim": "#9DA1AA",
+        "silver": "#C9CED8",
+        "steel": "#8FA3C4",
+        "steel-deep": "#3F5A85",
+        "ash": "#6E7480",
+        "frost": "#F2F4F8",
+        "fog": "#EEF0F3",
+        "fog-raised": "#F7F8FA",
+        "fog-line": "#CDD1D9",
+        "graphite": "#121316",
+        "graphite-mid": "#3A3F4A",
+        "graphite-soft": "#555B66",
+        "white": "#FFFFFF",
+        "coral": "#FF8A80",
+        "coral-deep": "#B3261E"
+      },
+      "dark": {
+        "bg": "void",
+        "surface": "coal",
+        "surface-raised": "coal-raised",
+        "border": "coal-line",
+        "text": "moon",
+        "text-muted": "moon-dim",
+        "accent": "silver",
+        "accent-strong": "moon",
+        "on-accent": "void",
+        "highlight": "steel",
+        "danger": "coral"
+      },
+      "light": {
+        "bg": "fog",
+        "surface": "fog-raised",
+        "surface-raised": "white",
+        "border": "fog-line",
+        "text": "graphite",
+        "text-muted": "graphite-soft",
+        "accent": "graphite-mid",
+        "accent-strong": "graphite",
+        "on-accent": "white",
+        "highlight": "steel-deep",
+        "danger": "coral-deep"
+      },
+      "mark": {
+        "tl": "frost",
+        "tr": "silver",
+        "bl": "ash",
+        "br": "steel"
+      },
+      "coin": {
+        "dark": "steel",
+        "light": "steel-deep"
+      }
+    },
+    "obsidian": {
+      "label": "Obsidian",
+      "idea": "The owner's Obsidian Matte theme from their portfolio: matte black, white chalk ink, glass edged in chalk. No colour accent.",
+      "seed": "#8C8883",
+      "variant": 2,
+      "tint": "#141414",
+      "color": {
+        "obsidian": "#0C0C0C",
+        "slab": "#141414",
+        "slab-raised": "#1A1A1A",
+        "slab-line": "#2C2B2A",
+        "chalk": "#E4E0DB",
+        "chalk-soft": "#B0A89F",
+        "chalk-accent": "#D6D2CC",
+        "chalk-mid": "#C8C4BF",
+        "stone": "#8E8780",
+        "stone-deep": "#605850",
+        "paper": "#F2F0EC",
+        "paper-raised": "#F8F7F4",
+        "paper-line": "#D5D1CA",
+        "ink": "#141414",
+        "ink-mid": "#3A3632",
+        "ink-soft": "#5A544D",
+        "stone-ink": "#6A635B",
+        "white": "#FFFFFF",
+        "clay": "#E0796B",
+        "clay-deep": "#A8321F"
+      },
+      "dark": {
+        "bg": "obsidian",
+        "surface": "slab",
+        "surface-raised": "slab-raised",
+        "border": "slab-line",
+        "text": "chalk",
+        "text-muted": "chalk-soft",
+        "accent": "chalk-accent",
+        "accent-strong": "chalk",
+        "on-accent": "obsidian",
+        "highlight": "stone",
+        "danger": "clay"
+      },
+      "light": {
+        "bg": "paper",
+        "surface": "paper-raised",
+        "surface-raised": "white",
+        "border": "paper-line",
+        "text": "ink",
+        "text-muted": "ink-soft",
+        "accent": "ink-mid",
+        "accent-strong": "ink",
+        "on-accent": "white",
+        "highlight": "stone-ink",
+        "danger": "clay-deep"
+      },
+      "mark": {
+        "tl": "chalk",
+        "tr": "chalk-mid",
+        "bl": "stone-deep",
+        "br": "stone"
+      },
+      "coin": {
+        "dark": "chalk-mid",
+        "light": "ink-soft"
+      }
+    },
+    "felt": {
+      "label": "Felt",
+      "idea": "Casino table: ink, green felt, emerald, gold.",
+      "seed": "#1FC98A",
+      "variant": 3,
+      "tint": "#10231C",
+      "color": {
+        "ink": "#0B1210",
+        "felt": "#12241E",
+        "felt-raised": "#1A3229",
+        "felt-line": "#2A4A3E",
+        "emerald": "#1FC98A",
+        "emerald-deep": "#0B6B49",
+        "gold": "#F4C95D",
+        "gold-mid": "#C4941A",
+        "gold-deep": "#7A5600",
+        "paper": "#F3F1E7",
+        "paper-line": "#CFCBB8",
+        "white": "#FFFFFF",
+        "ruby": "#FF6B6B",
+        "ruby-deep": "#B3261E",
+        "mint": "#6FE0B5"
+      },
+      "dark": {
+        "bg": "ink",
+        "surface": "felt",
+        "surface-raised": "felt-raised",
+        "border": "felt-line",
+        "text": "paper",
+        "text-muted": "#9FB3A8",
+        "accent": "emerald",
+        "accent-strong": "emerald",
+        "on-accent": "ink",
+        "highlight": "gold",
+        "danger": "ruby"
+      },
+      "light": {
+        "bg": "paper",
+        "surface": "#FBFAF4",
+        "surface-raised": "white",
+        "border": "paper-line",
+        "text": "ink",
+        "text-muted": "#4F6058",
+        "accent": "emerald-deep",
+        "accent-strong": "emerald-deep",
+        "on-accent": "white",
+        "highlight": "gold-deep",
+        "danger": "ruby-deep"
+      },
+      "mark": {
+        "tl": "mint",
+        "tr": "emerald",
+        "bl": "emerald-deep",
+        "br": "gold"
+      },
+      "coin": {
+        "dark": "gold",
+        "light": "gold-mid"
+      }
+    },
+    "burgundy": {
+      "label": "Burgundy",
+      "idea": "Burgundy and moonlight grey: cool grey surfaces, a wine accent, silver highlights.",
+      "seed": "#800020",
+      "variant": 1,
+      "tint": "#2A1118",
+      "color": {
+        "night": "#121317",
+        "slate": "#1B1D23",
+        "slate-raised": "#262931",
+        "slate-line": "#383C48",
+        "moon": "#DDE0E8",
+        "moon-dim": "#A4A9B6",
+        "silver": "#C9CEDA",
+        "silver-deep": "#565C6B",
+        "burgundy": "#8C1C3A",
+        "burgundy-deep": "#6E1230",
+        "rose": "#EE8FA1",
+        "mist": "#EEF0F4",
+        "mist-line": "#CBD0DA",
+        "graphite": "#17191E",
+        "white": "#FFFFFF",
+        "ember": "#FF9466",
+        "ember-deep": "#A8430A",
+        "wine": "#C8325C"
+      },
+      "dark": {
+        "bg": "night",
+        "surface": "slate",
+        "surface-raised": "slate-raised",
+        "border": "slate-line",
+        "text": "moon",
+        "text-muted": "moon-dim",
+        "accent": "rose",
+        "accent-strong": "burgundy",
+        "on-accent": "white",
+        "highlight": "silver",
+        "danger": "ember"
+      },
+      "light": {
+        "bg": "mist",
+        "surface": "#F8F9FB",
+        "surface-raised": "white",
+        "border": "mist-line",
+        "text": "graphite",
+        "text-muted": "silver-deep",
+        "accent": "burgundy",
+        "accent-strong": "burgundy",
+        "on-accent": "white",
+        "highlight": "silver-deep",
+        "danger": "ember-deep"
+      },
+      "mark": {
+        "tl": "rose",
+        "tr": "wine",
+        "bl": "burgundy",
+        "br": "moon"
+      },
+      "coin": {
+        "dark": "rose",
+        "light": "burgundy"
+      }
+    }
+  },
+  "font": {
+    "ui": "'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif",
+    "display": "'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif",
+    "mono": "'Cascadia Mono', Consolas, ui-monospace, monospace"
+  },
+  "radius": {
+    "sm": 6,
+    "control": 10,
+    "md": 12,
+    "lg": 16,
+    "pill": 999
+  },
+  "space": [
+    0,
+    4,
+    8,
+    12,
+    16,
+    24,
+    32,
+    48,
+    64
+  ]
+}

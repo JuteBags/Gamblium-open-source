@@ -1,0 +1,103 @@
+/* Gamblium skin. Built by branding/make_icons.py from palette.json; do not edit. */
+@media (prefers-color-scheme: dark) {
+:root {
+  --leo-color-page-background: #030304;
+  --leo-color-container-background: #0D0E10;
+  --leo-color-container-highlight: #17181B;
+  --leo-color-container-interactive: color-mix(in srgb, #E4E6EB 10%, transparent);
+  --leo-color-divider-subtle: color-mix(in srgb, #E4E6EB 11%, transparent);
+  --leo-color-divider-strong: color-mix(in srgb, #E4E6EB 22%, transparent);
+  --leo-color-divider-interactive: #C9CED8;
+  --leo-color-text-primary: #E4E6EB;
+  --leo-color-text-secondary: #9DA1AA;
+  --leo-color-text-interactive: #C9CED8;
+  --leo-color-icon-default: #9DA1AA;
+  --leo-color-icon-interactive: #C9CED8;
+  --leo-color-button-background: #E4E6EB;
+  --leo-color-schemes-primary: #E4E6EB;
+  --leo-color-schemes-on-primary: #030304;
+  --leo-color-schemes-on-surface: #E4E6EB;
+  --leo-color-schemes-on-surface-variant: #9DA1AA;
+  --leo-color-schemes-surface: #0D0E10;
+  --leo-color-schemes-background: #030304;
+}
+html:root {
+  --cr-focus-outline-color: color-mix(in srgb, #8FA3C4 75%, transparent);
+  --cr-card-background-color: #0D0E10;
+  --cr-separator-color: color-mix(in srgb, #E4E6EB 11%, transparent);
+  --cr-primary-text-color: #E4E6EB;
+  --cr-secondary-text-color: #9DA1AA;
+}
+}
+[data-theme="dark"] {
+  --leo-color-page-background: #030304;
+  --leo-color-container-background: #0D0E10;
+  --leo-color-container-highlight: #17181B;
+  --leo-color-container-interactive: color-mix(in srgb, #E4E6EB 10%, transparent);
+  --leo-color-divider-subtle: color-mix(in srgb, #E4E6EB 11%, transparent);
+  --leo-color-divider-strong: color-mix(in srgb, #E4E6EB 22%, transparent);
+  --leo-color-divider-interactive: #C9CED8;
+  --leo-color-text-primary: #E4E6EB;
+  --leo-color-text-secondary: #9DA1AA;
+  --leo-color-text-interactive: #C9CED8;
+  --leo-color-icon-default: #9DA1AA;
+  --leo-color-icon-interactive: #C9CED8;
+  --leo-color-button-background: #E4E6EB;
+  --leo-color-schemes-primary: #E4E6EB;
+  --leo-color-schemes-on-primary: #030304;
+  --leo-color-schemes-on-surface: #E4E6EB;
+  --leo-color-schemes-on-surface-variant: #9DA1AA;
+  --leo-color-schemes-surface: #0D0E10;
+  --leo-color-schemes-background: #030304;
+}
+@media (prefers-color-scheme: light) {
+:root {
+  --leo-color-page-background: #EEF0F3;
+  --leo-color-container-background: #F7F8FA;
+  --leo-color-container-highlight: #FFFFFF;
+  --leo-color-container-interactive: color-mix(in srgb, #121316 10%, transparent);
+  --leo-color-divider-subtle: color-mix(in srgb, #121316 11%, transparent);
+  --leo-color-divider-strong: color-mix(in srgb, #121316 22%, transparent);
+  --leo-color-divider-interactive: #3A3F4A;
+  --leo-color-text-primary: #121316;
+  --leo-color-text-secondary: #555B66;
+  --leo-color-text-interactive: #3A3F4A;
+  --leo-color-icon-default: #555B66;
+  --leo-color-icon-interactive: #3A3F4A;
+  --leo-color-button-background: #121316;
+  --leo-color-schemes-primary: #121316;
+  --leo-color-schemes-on-primary: #FFFFFF;
+  --leo-color-schemes-on-surface: #121316;
+  --leo-color-schemes-on-surface-variant: #555B66;
+  --leo-color-schemes-surface: #F7F8FA;
+  --leo-color-schemes-background: #EEF0F3;
+}
+html:root {
+  --cr-focus-outline-color: color-mix(in srgb, #3F5A85 75%, transparent);
+  --cr-card-background-color: #F7F8FA;
+  --cr-separator-color: color-mix(in srgb, #121316 11%, transparent);
+  --cr-primary-text-color: #121316;
+  --cr-secondary-text-color: #555B66;
+}
+}
+[data-theme="light"] {
+  --leo-color-page-background: #EEF0F3;
+  --leo-color-container-background: #F7F8FA;
+  --leo-color-container-highlight: #FFFFFF;
+  --leo-color-container-interactive: color-mix(in srgb, #121316 10%, transparent);
+  --leo-color-divider-subtle: color-mix(in srgb, #121316 11%, transparent);
+  --leo-color-divider-strong: color-mix(in srgb, #121316 22%, transparent);
+  --leo-color-divider-interactive: #3A3F4A;
+  --leo-color-text-primary: #121316;
+  --leo-color-text-secondary: #555B66;
+  --leo-color-text-interactive: #3A3F4A;
+  --leo-color-icon-default: #555B66;
+  --leo-color-icon-interactive: #3A3F4A;
+  --leo-color-button-background: #121316;
+  --leo-color-schemes-primary: #121316;
+  --leo-color-schemes-on-primary: #FFFFFF;
+  --leo-color-schemes-on-surface: #121316;
+  --leo-color-schemes-on-surface-variant: #555B66;
+  --leo-color-schemes-surface: #F7F8FA;
+  --leo-color-schemes-background: #EEF0F3;
+}

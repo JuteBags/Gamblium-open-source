@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark light">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tabs and memory · Gamblium</title>
+<link rel="icon" href="icons/icon-32.png">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+<script src="scheme.js"></script>
+<script src="../content/menu.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <img class="mark" alt="" width="22" height="22">
+  <span class="product">Gamblium</span>
+  <nav aria-label="Gamblium pages">
+    <a href="dashboard.html" aria-current="page">Tabs and memory</a>
+    <span class="navhead">Library</span>
+    <a class="sub" href="history.html">History</a>
+    <a class="sub" href="downloads.html">Downloads</a>
+    <a class="sub" href="sessions.html">Sessions</a>
+    <a href="security.html">Security</a>
+    <a href="settings.html">Settings</a>
+  </nav>
+</header>
+
+<main class="page">
+  <div class="title spread">
+    <div>
+      <h1>Tabs and memory</h1>
+      <p id="line">Reading…</p>
+    </div>
+    <div class="row">
+      <span id="did" class="saved" role="status"></span>
+      <button id="sleepAll" type="button" class="primary">Sleep hidden tabs now</button>
+    </div>
+  </div>
+
+  <div id="helperNote" class="notice warn" style="margin-bottom: 16px" hidden></div>
+
+  <!-- Every open tab as one block, as wide as the memory it holds. -->
+  <section class="map" aria-labelledby="map-title">
+    <div class="spread">
+      <h2 id="map-title">Memory by tab <span id="fTabs" class="count">–</span></h2>
+      <ul class="legend" id="fLegend"></ul>
+    </div>
+    <div id="map" class="blocks" role="list"></div>
+    <dl class="facts">
+      <div><dt>Gamblium uses</dt><dd><span id="fMem">–</span> <span class="sub" id="fMemSub"></span></dd></div>
+      <div><dt>Processor</dt><dd><span id="fCpu">–</span> <span class="sub" id="fCpuSub">of one core</span></dd></div>
+      <div><dt>Free on this computer</dt><dd><span id="fFree">–</span> <span class="sub" id="fFreeSub"></span></dd></div>
+    </dl>
+  </section>
+
+  <div class="grid cols-2-1">
+    <section aria-labelledby="tabs-title">
+      <h2 id="tabs-title" class="sr">Tabs</h2>
+      <div class="toolbar">
+        <input id="q" type="search" placeholder="Filter tabs by name or site" aria-label="Filter tabs by name or site" autocomplete="off" spellcheck="false">
+        <div id="states" class="seg" role="group" aria-label="Show tabs that are"></div>
+        <span class="grow"></span>
+        <div id="bulk" class="row" hidden>
+          <span id="picked" class="saved"></span>
+          <button id="sleepPicked" type="button">Sleep</button>
+          <button id="closePicked" type="button">Close</button>
+          <button id="clearPicked" type="button" class="quiet">Clear</button>
+        </div>
+      </div>
+      <div class="tablewrap">
+        <table class="tabs">
+          <thead>
+            <tr>
+              <th scope="col" class="fit"><input id="pickAll" type="checkbox" aria-label="Select every tab shown"></th>
+              <th scope="col" data-sort="title"><button type="button" class="sort">Tab</button></th>
+              <th scope="col" data-sort="state" class="fit"><button type="button" class="sort">State</button></th>
+              <th scope="col" data-sort="memory" class="num"><button type="button" class="sort">Memory</button></th>
+              <th scope="col" data-sort="cpu" class="num"><button type="button" class="sort">Processor</button></th>
+              <th scope="col" class="fit"><span class="sr">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <p id="none" class="empty" hidden>No tab matches. <button id="reset" type="button" class="quiet">Show all tabs</button></p>
+      <p class="lead" style="margin: 14px 0 0">Press <kbd>/</kbd> to filter.</p>
+    </section>
+
+    <div class="stack">
+      <section class="panel" aria-labelledby="kinds-title">
+        <header><h2 id="kinds-title">Where the memory goes</h2></header>
+        <div id="kinds" class="muted">Reading…</div>
+      </section>
+
+      <section class="panel" aria-labelledby="rules-title">
+        <header>
+          <h2 id="rules-title">Sleep rules right now</h2>
+          <a href="settings.html#tabs">Change</a>
+        </header>
+        <ul id="reasons" class="plain"></ul>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script type="module" src="dashboard.js"></script>
+</body>
+</html>

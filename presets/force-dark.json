@@ -1,0 +1,4 @@
+{
+  "name": "force-dark",
+  "args": ["--enable-features=WebContentsForceDark"]
+}

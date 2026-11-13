@@ -1,0 +1,65 @@
+/* Gamblide: the panel behind the diamond in the address bar (Brave's Shields
+   panel page), in Gamblium's shape and depth. tools/rebrand adds this to the
+   panel's page in the private copy. Colours come from Brave's own tokens,
+   which branding/skin.css has already set to the scheme, so this file holds
+   no colour of its own.
+
+   Only surfaces change: ground, curves, light, type sizes. The panel's
+   layout rules are left as they are, so states this was not seen in still
+   lay out the way Brave built them. "#root" in front of every rule is what
+   lets these win over the panel's own rules, which are added later. */
+:root {
+  --g-ink: var(--leo-color-text-primary);
+  --g-rim: color-mix(in srgb, var(--g-ink) 13%, transparent);
+  --g-sheen: linear-gradient(180deg, color-mix(in srgb, var(--g-ink) 10%, transparent), color-mix(in srgb, var(--g-ink) 3%, transparent) 64%);
+  --g-sheen-2: linear-gradient(180deg, color-mix(in srgb, var(--g-ink) 17%, transparent), color-mix(in srgb, var(--g-ink) 7%, transparent) 70%);
+  --g-depth: inset 0 1px 0 color-mix(in srgb, var(--g-ink) 22%, transparent), inset 0 0 0 1px var(--g-rim), 0 18px 30px -22px rgb(0 0 0 / 0.9);
+  --leo-button-radius: 999px;
+  --leo-toggle-checked-color: var(--g-ink);
+  --leo-toggle-unchecked-color: color-mix(in srgb, var(--g-ink) 22%, transparent);
+  --leo-toggle-thumb-color: var(--leo-color-page-background);
+  --leo-menu-item-border-radius: 10px;
+  --leo-control-radius: 12px;
+}
+
+/* The ground: the scheme's background with one pool of light at the top. */
+html, body { background-color: var(--leo-color-page-background) !important; color: var(--g-ink); }
+body { background-image: radial-gradient(460px 240px at 50% -70px, color-mix(in srgb, var(--g-ink) 18%, transparent), transparent 72%) !important; background-repeat: no-repeat !important; }
+#root > div, #root main, #root main > div { background: transparent; }
+
+/* The top: the site and its switch as one raised tile. */
+#root main > div:first-child { padding: 14px; gap: 10px; border-bottom: 0; }
+#root .site-info { padding: 14px 14px 14px 16px; border-radius: 18px; background-image: var(--g-sheen); box-shadow: var(--g-depth); }
+#root .site-icon { border-radius: 12px; background: color-mix(in srgb, var(--g-ink) 9%, transparent); box-shadow: inset 0 0 0 1px var(--g-rim); }
+#root .site-icon img { border-radius: 4px; }
+#root .site-text h3 { font-size: 17px; line-height: 24px; letter-spacing: -0.01em; }
+#root .shields-status { font-size: 13px; line-height: 20px; color: var(--leo-color-text-secondary); }
+#root .shields-status strong { font-size: 13px; line-height: 20px; color: var(--g-ink); }
+
+/* What was blocked: the number is the headline of the panel. */
+#root .block-info { padding: 16px; border-radius: 18px; justify-content: flex-start; gap: 12px; background-image: var(--g-sheen); box-shadow: var(--g-depth); color: var(--leo-color-text-secondary); }
+#root .block-info .count { font-size: 34px; line-height: 36px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--g-ink); }
+
+/* The question that comes up when a site is switched off sits nearer than the rest. */
+#root .report-prompt { border-radius: 18px; background-color: transparent; background-image: var(--g-sheen-2); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--g-ink) 30%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--g-ink) 18%, transparent), 0 22px 36px -22px rgb(0 0 0); }
+
+/* The rows of switches. */
+#root .view-toggle { margin: 0 14px; width: calc(100% - 28px); padding: 10px 12px; border-radius: 12px; }
+#root .view-toggle:hover { background: color-mix(in srgb, var(--g-ink) 6%, transparent); color: var(--g-ink); --leo-icon-color: var(--g-ink); }
+#root [data-expanded=true] .view-toggle { color: var(--g-ink); --leo-icon-color: var(--g-ink); }
+#root .toggle { border-radius: 12px; }
+#root .counter { border-radius: 999px; padding: 2px 8px; background-color: color-mix(in srgb, var(--g-ink) 12%, transparent); color: var(--g-ink); }
+#root .block-elements button, #root button.action { color: var(--g-ink); }
+#root leo-button:hover { border-radius: 999px; }
+
+/* The lists of what was blocked and allowed. */
+#root .list-header { margin: 0 8px; border-radius: 12px; }
+#root .resource { border-radius: 10px; }
+#root .resource:hover { background: color-mix(in srgb, var(--g-ink) 5%, transparent); }
+#root .header leo-button { border-radius: 999px; }
+
+/* The foot. */
+#root .actions { padding: 4px 14px 14px; border-top: 0; }
+#root .try-off { background: transparent; border-top: 0; }
+/* Brave's help links ("Learn more" under "If this site seems broken") lead to brave.com: our panel ends at the sentence (critique, Nov 14 2026). */
+a[href*="brave.com"] { display: none !important; }

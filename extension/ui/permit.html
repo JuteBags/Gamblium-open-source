@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark light">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Allow agents to change settings? · Gamblium</title>
+<link rel="icon" href="icons/icon-32.png">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+<script src="scheme.js"></script>
+</head>
+<body class="permitpage">
+<main class="permit" aria-labelledby="permit-title">
+  <div class="phead">
+    <img class="pmark" src="icons/icon-128.png" alt="" width="40" height="40">
+    <div>
+      <h1 id="permit-title">Allow agents to change settings?</h1>
+      <p id="why">A program working through Gamblium's command line wants to change browser or Gamblium settings.</p>
+    </div>
+  </div>
+
+  <ul id="asks" class="pasks" aria-label="What was asked"></ul>
+
+  <p id="now" class="pnow" role="status"></p>
+
+  <div class="pchoose" id="choose">
+    <button type="button" class="primary" id="notNow">Not now</button>
+    <div class="pfor">
+      <span class="name" id="for-label">Allow for</span>
+      <div class="seg" id="times" role="group" aria-labelledby="for-label"></div>
+    </div>
+    <button type="button" class="quiet" id="always">Always allow, never ask</button>
+  </div>
+
+  <p class="hint pfoot" id="foot">Change it any time in <a href="settings.html#agents">Settings &gt; Agents</a>.</p>
+</main>
+<script type="module" src="permit.js"></script>
+</body>
+</html>

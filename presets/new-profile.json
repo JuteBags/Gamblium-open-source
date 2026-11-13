@@ -1,0 +1,16 @@
+{
+  "name": "new-profile",
+  "preferences": {
+    "bookmark_bar.visibility_state": 2,
+    "brave.new_tab_page.show_background_image": true,
+    "brave.new_tab_page.background": {
+      "type": "color",
+      "selected_value": "#0B1210",
+      "random": false
+    },
+    "extensions.pinned_extensions": [
+      "pbgbdlkcienglhbfadbjolphinilbpia"
+    ],
+    "download.prompt_for_download": false
+  }
+}

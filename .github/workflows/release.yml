@@ -1,0 +1,143 @@
+# Builds and publishes a release. Runs when a version tag is pushed (v0.5.0,
+# v1.2.3): never on a pull request or an ordinary push. Started by hand it
+# builds the same package and keeps it as a workflow artifact, publishing
+# nothing, so the packaging can be tried before a tag exists.
+name: release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The tag must be the version in the code
+        shell: bash
+        run: |
+          code=$(grep -m1 '^version' crates/gamblium/Cargo.toml | cut -d'"' -f2)
+          tag="$code"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then tag="${GITHUB_REF_NAME#v}"; fi
+          for file in crates/gamblium/Cargo.toml crates/gamblium-dl/Cargo.toml; do
+            have=$(grep -m1 '^version' "$file" | cut -d'"' -f2)
+            [ "$have" = "$tag" ] || { echo "::error::$file says $have, the tag says $tag"; exit 1; }
+          done
+          have=$(grep -m1 '"version"' extension/manifest.json | cut -d'"' -f4)
+          [ "$have" = "$tag" ] || { echo "::error::extension/manifest.json says $have, the tag says $tag"; exit 1; }
+          echo "VERSION=$tag" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests
+        run: cargo test --workspace --locked
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Extension tests
+        shell: bash
+        run: node --test $(git ls-files 'extension/*.test.mjs' 'extension/**/*.test.mjs')
+
+      - name: Build
+        run: cargo build --release --workspace --locked
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The browser inside the package: Brave's own signed release of the
+      # version in tools/brave-version.txt, installed on this runner, copied
+      # and patched by `gamblium rebrand` exactly as on a user's machine.
+      - name: "The browser: Brave's release, with Gamblium's mark and name"
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $v = (Get-Content tools/brave-version.txt).Trim()
+          $url = "https://github.com/brave/brave-browser/releases/download/v$v/BraveBrowserStandaloneSilentSetup.exe"
+          Invoke-WebRequest $url -OutFile "$env:RUNNER_TEMP\brave-setup.exe"
+          $sig = Get-AuthenticodeSignature "$env:RUNNER_TEMP\brave-setup.exe"
+          if ($sig.Status -ne "Valid" -or $sig.SignerCertificate.Subject -notmatch "Brave Software") {
+            throw "the Brave installer is not signed by Brave Software: $($sig.Status) $($sig.SignerCertificate.Subject)"
+          }
+          Start-Process "$env:RUNNER_TEMP\brave-setup.exe" -Wait
+          $places = @("$env:ProgramFiles\BraveSoftware\Brave-Browser\Application", "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\Application")
+          $app = $null
+          foreach ($i in 1..60) {
+            $app = $places | Where-Object { Test-Path "$_\brave.exe" } | Select-Object -First 1
+            if ($app -and (Get-ChildItem $app -Directory | Where-Object { Test-Path "$($_.FullName)\resources.pak" })) { break }
+            Start-Sleep -Seconds 5
+          }
+          if (-not $app) { throw "Brave was not installed" }
+          Get-Process brave, BraveUpdate -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 3
+          Write-Host "Brave is in $app"
+          Get-ChildItem $app | Select-Object Name
+          python -m pip install --quiet pillow numpy
+          & target\release\gamblium.exe rebrand --brave "$app\brave.exe"
+          if ($LASTEXITCODE -ne 0) { throw "gamblium rebrand failed" }
+          $copy = "$env:LOCALAPPDATA\Gamblium\browser\Application"
+          $folder = Get-ChildItem $copy -Directory | Where-Object { Test-Path "$($_.FullName)\gamblium-rebrand.json" } | Select-Object -First 1
+          if (-not $folder) { throw "the copy was not patched" }
+          if (-not $folder.Name.EndsWith($v)) { throw "wanted Brave $v, the copy is $($folder.Name)" }
+          # Not part of a package: the originals kept for undoing, and logs.
+          Remove-Item "$($folder.FullName)\gamblium-rebrand-undo.zip", "$copy\debug.log" -ErrorAction SilentlyContinue
+          Set-Content "$copy\gamblium-shipped" "This browser came inside the Gamblium package."
+          "BROWSER=$copy" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      # One file to download: an installer (Inno Setup) holding the programs,
+      # the extension, presets, branding and the rebranded browser. A person
+      # double-clicks it; it installs for their Windows user (no admin rights)
+      # and starts Gamblium. Tests and the patcher are left out: the browser is
+      # rebranded here, on this machine, never on the user's.
+      - name: Package
+        shell: bash
+        run: |
+          out="Gamblium-$VERSION-windows-x64"
+          mkdir -p "dist/$out/tools" "dist/$out/browser"
+          cp target/release/gamblium.exe target/release/gamblium-app.exe target/release/gamblium-cli.exe target/release/gamblium-dl.exe "dist/$out/"
+          cp -r extension presets theme branding "dist/$out/"
+          cp LICENSE README.md "dist/$out/"
+          cp -r "$(cygpath "$BROWSER")" "dist/$out/browser/Application"
+          find "dist/$out" \( -name '*.test.mjs' -o -name 'test_*.py' -o -name '__pycache__' \) -prune -exec rm -rf {} +
+          cd dist
+          # Smoke: the packaged launcher finds the packaged browser by itself.
+          "./$out/gamblium.exe" launch --dry-run --user-data-dir "$RUNNER_TEMP/smoke" | tee smoke.txt
+          grep -q "inside this Gamblium package\|rebranded copy" smoke.txt
+          # The installer. Inno Setup is on GitHub's Windows runners; installed if not.
+          iscc="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          [ -x "$iscc" ] || choco install innosetup -y --no-progress > /dev/null
+          "$iscc" -Q "-DAppVersion=$VERSION" "-DPackage=$(cygpath -w "$PWD/$out")" "-O$(cygpath -w "$PWD")" "$(cygpath -w "$GITHUB_WORKSPACE/installer/gamblium.iss")"
+          sha256sum "Gamblium-Setup-$VERSION.exe" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          ls -la "Gamblium-Setup-$VERSION.exe"
+
+      - name: Keep the package (started by hand, nothing is published)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gamblium-${{ env.VERSION }}-windows-x64
+          path: |
+            dist/Gamblium-Setup-${{ env.VERSION }}.exe
+            dist/SHA256SUMS.txt
+          compression-level: 0
+          retention-days: 3
+
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/Gamblium-Setup-$VERSION.exe" dist/SHA256SUMS.txt \
+            --title "Gamblium $VERSION" \
+            --notes "Gamblium $VERSION for Windows (x64). Download Gamblium-Setup-$VERSION.exe and run it: it installs Gamblium, its browser included, for your Windows user (no admin rights) and starts it. Nothing else needs to be installed. Uninstall from Settings > Apps (your profile is kept). The installer is not code-signed yet, so Windows may warn about an unknown publisher (More info > Run anyway). SHA256SUMS.txt holds its checksum."

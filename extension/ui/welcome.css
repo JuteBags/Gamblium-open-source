@@ -1,0 +1,191 @@
+/* First run. One card on the scheme's ground: what is asked on the left,
+   the choices on the right, one decision per screen. The look is set by an
+   attribute, not by the system, so picking a theme shows at once. Nothing
+   moves by itself: a screen fades in when the person asks for it, and
+   colours cross-fade when a theme is picked. Nothing from the network. */
+* { box-sizing: border-box; }
+:root {
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+  --quick: 120ms ease-out;
+  --open: 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+/* Moonlit Grey */
+:root, [data-shows="dark"] {
+  --bg: #030304; --text: #E4E6EB; --muted: #9DA1AA; --hi: #8FA3C4; --accent: #C9CED8;
+  --sheen: linear-gradient(180deg, color-mix(in srgb, var(--text) 10%, transparent), color-mix(in srgb, var(--text) 3%, transparent) 64%);
+  --sheen-2: linear-gradient(180deg, color-mix(in srgb, var(--text) 16%, transparent), color-mix(in srgb, var(--text) 6%, transparent) 70%);
+  --rim: color-mix(in srgb, var(--text) 14%, transparent);
+  --depth: inset 0 1px 0 color-mix(in srgb, var(--text) 24%, transparent), inset 0 0 0 1px var(--rim), 0 30px 60px -30px rgb(0 0 0);
+  --depth-2: inset 0 1px 0 color-mix(in srgb, var(--text) 30%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--text) 16%, transparent), 0 60px 120px -40px rgb(0 0 0), 0 0 90px -20px color-mix(in srgb, var(--text) 16%, transparent);
+  --lockup: url("brand/moon/lockup-dark.svg");
+  color-scheme: dark;
+}
+/* Moonlit White */
+[data-look="light"], [data-shows="light"] {
+  --bg: #EEF0F3; --text: #121316; --muted: #555B66; --hi: #3F5A85; --accent: #3A3F4A;
+  --sheen: linear-gradient(180deg, rgb(255 255 255 / 0.85), rgb(255 255 255 / 0.45));
+  --sheen-2: linear-gradient(180deg, #fff, rgb(255 255 255 / 0.7));
+  --rim: color-mix(in srgb, var(--text) 12%, transparent);
+  --depth: inset 0 1px 0 #fff, inset 0 0 0 1px var(--rim), 0 28px 50px -30px rgb(20 24 34 / 0.45);
+  --depth-2: inset 0 1px 0 #fff, inset 0 0 0 1px var(--rim), 0 60px 110px -50px rgb(20 24 34 / 0.55);
+  --lockup: url("brand/moon/lockup-light.svg");
+  color-scheme: light;
+}
+[data-look] [data-shows="dark"] { color-scheme: dark; }
+
+html { background: var(--bg); transition: background-color var(--open); }
+body {
+  position: relative; isolation: isolate; margin: 0; min-height: 100vh;
+  display: grid; grid-template-rows: auto 1fr auto; justify-items: center;
+  font: 15px/1.5 var(--font-ui); color: var(--text);
+  transition: color var(--open);
+}
+body::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(1000px 620px at 50% -6%, color-mix(in srgb, var(--text) 18%, transparent), transparent 66%),
+    radial-gradient(700px 500px at 4% 104%, color-mix(in srgb, var(--hi) 20%, transparent), transparent 70%),
+    radial-gradient(560px 420px at 98% 80%, color-mix(in srgb, var(--text) 8%, transparent), transparent 72%);
+}
+[hidden] { display: none !important; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+h1:focus { outline: 0; }
+h1, p, ul, ol { margin: 0; padding: 0; }
+ul, ol { list-style: none; }
+
+.top { justify-self: stretch; display: flex; align-items: center; justify-content: space-between; padding: 22px 29px 0; }
+.lockup { display: block; height: 28px; width: auto; content: var(--lockup); }
+.text { padding: 0; border: 0; background: none; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
+.text:hover { color: var(--text); }
+
+/* The card: 400 for the question, the rest for the answers. */
+.card {
+  align-self: center; width: min(100% - 40px, 1040px); min-height: min(600px, 100vh - 170px); margin: 20px 0;
+  display: grid; grid-template-columns: 400px minmax(0, 1fr);
+  border-radius: 28px; overflow: hidden;
+  background-image: var(--sheen); -webkit-backdrop-filter: blur(26px) saturate(150%); backdrop-filter: blur(26px) saturate(150%);
+  box-shadow: var(--depth-2);
+}
+.ask { display: flex; flex-direction: column; padding: 34px 38px 30px; background: color-mix(in srgb, var(--bg) 46%, transparent); box-shadow: inset -1px 0 0 var(--rim); }
+.backlink { align-self: flex-start; height: 28px; padding: 0; border: 0; background: none; color: var(--hi); font-weight: 600; font-size: 14px; }
+.backlink[disabled] { visibility: hidden; }
+.eyebrow { margin-top: 22px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+h1 { margin-top: 8px; font: 600 36px/1.1 var(--font-display); letter-spacing: -0.022em; text-wrap: balance; overflow-wrap: anywhere; }
+.lead { margin-top: 16px; font-size: 16px; line-height: 1.55; color: var(--muted); }
+.hint { font-size: 13px; color: var(--muted); }
+.grow { flex: 1; min-height: 24px; }
+#said { min-height: 20px; margin-bottom: 10px; }
+.later { align-self: center; margin-top: 16px; font-size: 14px; }
+
+.primary, .quiet { height: 46px; padding: 0 22px; border: 0; border-radius: 999px; font: 600 15px/1 var(--font-ui); white-space: nowrap; transition: background-color var(--quick), transform var(--quick); }
+.primary { background: var(--text); color: var(--bg); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5), 0 10px 30px -12px color-mix(in srgb, var(--text) 60%, transparent); }
+.primary:hover { transform: translateY(-1px); }
+.primary.wide { width: 100%; height: 50px; }
+.quiet { background-color: transparent; background-image: var(--sheen); box-shadow: inset 0 0 0 1px var(--rim); font-weight: 400; }
+.quiet:hover { background-color: color-mix(in srgb, var(--text) 8%, transparent); }
+
+.pick { display: grid; align-content: center; padding: 34px 44px; min-width: 0; }
+.step { display: grid; gap: 16px; animation: arrive var(--open); }
+@keyframes arrive { from { opacity: 0; transform: translateX(18px); } }
+
+/* Name: the field, and under it the top of a new tab greeting you. */
+input[type="text"] {
+  display: block; width: 100%; height: 60px; padding: 0 24px;
+  border: 0; border-radius: 999px; outline: 0;
+  background-color: transparent; background-image: var(--sheen-2); box-shadow: var(--depth);
+  font: 20px/1 var(--font-ui);
+}
+/* A field that opens focused gets one thin lit edge, not a bright ring (same as our pages). */
+input[type="text"]:focus { box-shadow: var(--depth), 0 0 0 1px var(--hi); }
+input[type="text"]:focus-visible { outline: 0; } /* the page-wide bright ring is for buttons and choices */
+input::placeholder { color: var(--muted); opacity: 1; }
+.preview { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 2px 16px; margin-top: 10px; padding: 26px 26px 22px; border-radius: 22px; background: var(--bg) radial-gradient(420px 200px at 50% -40px, color-mix(in srgb, var(--text) 18%, transparent), transparent 70%); box-shadow: inset 0 0 0 1px var(--rim); }
+.p-hello { font: 600 26px/1.2 var(--font-display); letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.p-date { grid-row: 2; font-size: 13px; color: var(--muted); }
+.p-time { grid-row: 1 / span 2; grid-column: 2; font: 300 52px/1 var(--font-display); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.p-search { grid-column: 1 / -1; display: block; height: 40px; margin-top: 18px; border-radius: 999px; background-image: var(--sheen-2); box-shadow: inset 0 0 0 1px var(--rim); }
+
+/* The two looks, each drawn in its own colours whatever the page wears. */
+.looks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.look { display: grid; gap: 4px; padding: 12px 12px 16px; border-radius: 22px; background-color: var(--bg); background-image: var(--sheen); box-shadow: var(--depth); color: var(--text); cursor: pointer; transition: transform var(--quick); }
+.look:hover { transform: translateY(-2px); }
+.look input, .option input, .parts input, .seg input, .starters input { position: absolute; opacity: 0; pointer-events: none; }
+.look:has(input:checked) { box-shadow: var(--depth), 0 0 0 2px var(--bg), 0 0 0 4px var(--hi); }
+.look:has(input:focus-visible), .option:has(input:focus-visible), .starters label:has(input:focus-visible) { outline: 2px solid var(--text); outline-offset: 6px; }
+.mini { display: grid; gap: 8px; align-content: start; height: 150px; padding: 12px; margin-bottom: 10px; border-radius: 12px; background: var(--bg) radial-gradient(220px 120px at 50% -20px, color-mix(in srgb, var(--text) 20%, transparent), transparent 70%); box-shadow: inset 0 0 0 1px var(--rim); }
+.mini i { display: block; }
+.m-bar { width: 38%; height: 8px; border-radius: 999px; background: color-mix(in srgb, var(--text) 70%, transparent); }
+.m-search { height: 22px; margin-top: 8px; border-radius: 999px; background-image: var(--sheen-2); box-shadow: inset 0 0 0 1px var(--rim); }
+.m-tiles { display: flex !important; gap: 8px; }
+.m-tiles b { width: 22px; height: 22px; border-radius: 7px; background-image: var(--sheen-2); box-shadow: inset 0 0 0 1px var(--rim); }
+.m-card { height: 34px; border-radius: 9px; background-image: var(--sheen); box-shadow: inset 0 0 0 1px var(--rim); }
+.lname { padding: 0 6px; font: 600 18px/1.3 var(--font-display); }
+.lnote { padding: 0 6px; font-size: 13px; color: var(--muted); }
+#customise { justify-self: start; }
+.own { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding: 14px 18px; border-radius: 18px; background-image: var(--sheen); box-shadow: var(--depth); }
+.own label { display: inline-flex; align-items: center; gap: 10px; font-size: 14px; }
+input[type="color"] { width: 40px; height: 34px; padding: 3px; border: 0; border-radius: 12px; background: color-mix(in srgb, var(--text) 8%, transparent); box-shadow: inset 0 0 0 1px var(--rim); cursor: pointer; }
+input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 9px; }
+
+/* A choice of a few: tall rows, the one chosen lit. */
+.options { display: grid; gap: 12px; }
+.option { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 2px 16px; min-height: 76px; padding: 14px 20px; border-radius: 20px; background-image: var(--sheen); box-shadow: var(--depth); cursor: pointer; transition: transform var(--quick); }
+.option:hover { transform: translateY(-1px); }
+.option::before { content: ""; grid-row: 1 / span 2; width: 20px; height: 20px; border-radius: 999px; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--text) 45%, transparent); }
+.option:has(input:checked) { background-image: var(--sheen-2); box-shadow: var(--depth), 0 0 0 2px var(--hi); }
+.option:has(input:checked)::before { background: radial-gradient(circle, var(--hi) 0 42%, transparent 46%); box-shadow: inset 0 0 0 1.5px var(--hi); }
+.oname { grid-column: 2; font: 600 16px/1.3 var(--font-display); }
+.onote { grid-column: 2; font-size: 13px; color: var(--muted); }
+.option:not(:has(.onote)) .oname { grid-row: 1 / span 2; }
+.option .mono { grid-column: 3; grid-row: 1 / span 2; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 14px; background: color-mix(in srgb, var(--text) 9%, transparent); box-shadow: inset 0 0 0 1px var(--rim); font: 600 18px/1 var(--font-display); }
+
+/* Sites you use most: nine tiles that are on or off. */
+.starters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.starters label { display: grid; justify-items: center; align-content: center; gap: 10px; height: 118px; border-radius: 20px; background-image: var(--sheen); box-shadow: var(--depth); color: var(--muted); cursor: pointer; transition: transform var(--quick), color var(--quick); }
+.starters label:hover { transform: translateY(-2px); color: var(--text); }
+.starters .mono { width: 46px; height: 46px; display: grid; place-items: center; border-radius: 15px; background: color-mix(in srgb, var(--text) 10%, transparent); box-shadow: inset 0 0 0 1px var(--rim); font: 600 20px/1 var(--font-display); color: var(--text); }
+.starters label { position: relative; }
+/* Picked: the tile fills and a tick sits in its corner, so on and off read apart without the ring alone. */
+.starters label:has(input:checked) { color: var(--text); background: color-mix(in srgb, var(--hi) 22%, var(--bg)); background-image: var(--sheen-2); box-shadow: var(--depth), 0 0 0 2px var(--hi); }
+.starters label:has(input:checked) .mono { background: var(--bg); }
+.starters .tick { position: absolute; top: 10px; right: 10px; width: 20px; height: 20px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--rim); }
+.starters label:has(input:checked) .tick { background: var(--hi); box-shadow: none; }
+.starters label:has(input:checked) .tick::after { content: ""; position: absolute; inset: 0; background: var(--bg);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5.5 10.5l3 3 6-7' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 20px no-repeat; }
+.starters .mono svg { display: block; }
+
+/* New tab parts: chips that are on or off. */
+.parts { display: flex; flex-wrap: wrap; gap: 8px; }
+.parts label { display: inline-flex; align-items: center; height: 38px; padding: 0 16px; border-radius: 999px; background-image: var(--sheen); box-shadow: inset 0 0 0 1px var(--rim); color: var(--muted); cursor: pointer; transition: background-color var(--quick), color var(--quick); }
+.parts label:has(input:checked) { background: var(--text); color: var(--bg); font-weight: 600; box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5); }
+.parts label:has(input:focus-visible), .seg label:has(input:focus-visible) { outline: 2px solid var(--text); outline-offset: 3px; }
+.seg { display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 3px; margin-top: 8px; padding: 3px; border-radius: 999px; background-image: var(--sheen); box-shadow: inset 0 0 0 1px var(--rim); }
+.seg label { height: 36px; display: grid; place-items: center; border-radius: 999px; font-size: 13px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.seg label:has(input:checked) { background: var(--text); color: var(--bg); font-weight: 600; }
+
+.summary { display: grid; gap: 2px; padding: 8px; border-radius: 22px; background-image: var(--sheen); box-shadow: var(--depth); }
+.summary li { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 16px; padding: 9px 14px; }
+.summary li > span:first-child { color: var(--muted); }
+.summary .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.summary .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; background: color-mix(in srgb, var(--text) 8%, transparent); box-shadow: inset 0 0 0 1px var(--rim); font-size: 13px; }
+.summary .chip svg { flex: none; }
+#restart { justify-self: start; }
+
+.dots { display: flex; gap: 8px; padding: 0 0 26px; }
+.dots li { width: 8px; height: 8px; border-radius: 999px; background: color-mix(in srgb, var(--text) 22%, transparent); transition: width var(--open), background-color var(--open); }
+.dots li.on { width: 26px; background: var(--text); }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+@media (max-width: 900px) {
+  .card { grid-template-columns: 1fr; }
+  .ask { padding: 26px 26px 22px; box-shadow: inset 0 -1px 0 var(--rim); }
+  .grow { min-height: 16px; }
+  .pick { padding: 26px; order: 2; }
+  h1 { font-size: 30px; }
+}
+@media (max-width: 560px) { .looks { grid-template-columns: 1fr; } .seg { grid-template-columns: 1fr; border-radius: 18px; } .summary li { grid-template-columns: 1fr; gap: 0; } }

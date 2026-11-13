@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark light">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security · Gamblium</title>
+<link rel="icon" href="icons/icon-32.png">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+<script src="scheme.js"></script>
+<script src="../content/menu.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <img class="mark" alt="" width="22" height="22">
+  <span class="product">Gamblium</span>
+  <nav aria-label="Gamblium pages">
+    <a href="dashboard.html">Tabs and memory</a>
+    <span class="navhead">Library</span>
+    <a class="sub" href="history.html">History</a>
+    <a class="sub" href="downloads.html">Downloads</a>
+    <a class="sub" href="sessions.html">Sessions</a>
+    <a href="security.html" aria-current="page">Security</a>
+    <a href="settings.html">Settings</a>
+  </nav>
+</header>
+
+<main class="page">
+  <div class="title">
+    <h1 id="host">Security</h1>
+    <p id="target" class="mono"></p>
+    <form id="sitePick" class="sitepick" autocomplete="off" hidden>
+      <label class="sr" for="siteAddr">A site to check</label>
+      <input type="text" id="siteAddr" spellcheck="false" placeholder="Check a site: example.com">
+      <button type="submit" class="primary" id="siteGo" disabled title="Type a site name first">Check</button>
+      <p id="siteBad" role="status" style="margin:0;color:var(--bad-ink);font-size:13px" hidden></p>
+    </form>
+  </div>
+
+  <section class="stack" aria-label="Scope" id="scopeBox">
+    <div id="scope" class="notice" role="status">Checking whether this site is yours to test…</div>
+    <div id="scopeAdd" class="scopeadd" hidden>
+      <label class="check"><input type="checkbox" id="scopeConfirm"> I own this host or am authorised to test it</label>
+      <button id="scopeAddBtn" type="button" disabled>Add it to my scope</button>
+    </div>
+  </section>
+
+  <!-- The main thing: one button, then what was checked, what is wrong, how bad, what to do. -->
+  <section class="panel checkup" aria-labelledby="audit-title">
+    <header>
+      <h2 id="audit-title" title="How well this site is set up to protect the people who use it.">Check-up</h2>
+      <button id="auditBtn" type="button" class="primary">Check this site</button>
+    </header>
+    <div id="auditOut" class="muted">Nothing is attacked.</div>
+    <label class="check also"><input type="checkbox" id="auditCve"> Also look up known flaws in the site's software <span class="muted">(sends the software names to nvd.nist.gov)</span></label>
+  </section>
+
+  <!-- Tools for testers: used now and then, so folded at the foot (Rule 11). -->
+  <details class="panel fold testers" id="testers">
+    <summary>For testers <span class="fstate">Ports, proxy, requests · only for sites you may test</span></summary>
+  <div class="grid cols-2" style="margin-top: 14px">
+    <section class="panel" aria-labelledby="ports-title">
+      <header>
+        <h2 id="ports-title">Open ports</h2>
+        <button id="scanBtn" type="button">Scan common ports</button>
+      </header>
+      <label class="sr" for="scanPorts">Ports to scan</label>
+      <input type="text" id="scanPorts" class="wide" placeholder="Common ports, or your own: 80,443,8000-8100">
+      <div id="scanOut" class="muted">Connects to each port; nothing is sent.</div>
+    </section>
+
+    <section class="panel" aria-labelledby="proxy-title">
+      <header><h2 id="proxy-title">Through a proxy</h2></header>
+      <p id="proxyNow" class="lead">This profile: checking…</p>
+      <p class="lead">A pen-test profile through Burp, with TLS keys for Wireshark:</p>
+      <div class="codecopy"><pre class="code" id="proxyCmd">gamblium launch --pentest --proxy http://127.0.0.1:8080 --tls-keylog keys.log</pre><button type="button" class="quiet copybtn" data-copy="proxyCmd">Copy</button></div>
+    </section>
+  </div>
+
+  <section class="panel requests" aria-labelledby="req-title">
+    <header>
+      <h2 id="req-title" title="Every request the page makes, with its headers, while capture is on.">Requests</h2>
+      <div class="row">
+        <button id="capStart" type="button">Start capture</button>
+        <button id="capStop" type="button">Stop</button>
+        <button id="capClear" type="button" class="quiet">Clear</button>
+      </div>
+    </header>
+    <div class="spread filters">
+      <div class="row">
+        <label class="sr" for="capFilter">Filter by address</label>
+        <input type="search" id="capFilter" placeholder="Filter by address">
+        <label class="check"><input type="checkbox" id="capErrors"> Errors only</label>
+      </div>
+      <span id="capStatus" class="muted num"></span>
+    </div>
+    <div id="capOut" class="tablewrap"></div>
+    <div id="capDetail" hidden></div>
+  </section>
+  </details>
+</main>
+
+<script type="module" src="security.js"></script>
+</body>
+</html>
