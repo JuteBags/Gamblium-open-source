@@ -41,7 +41,8 @@
       <a href="#downloads" data-area="downloads">Downloads<span>Folder, Gamblium's downloader, torrents</span></a>
       <a href="#network" data-area="network">Network<span>Proxy</span></a>
       <a href="#agents" data-area="agents">Agents<span>Control from the command line</span></a>
-      <a href="#profile" data-area="profile">This profile<span>Label and versions</span></a>
+      <a href="#gamblium" data-area="gamblium">Gamblium<span>Version and updates</span></a>
+      <a href="#profile" data-area="profile">This profile<span>Label and folder</span></a>
       <a href="#browser" data-area="browser">Browser<span>Search, privacy, passwords</span></a>
     </nav>
     <div class="area">
@@ -128,7 +129,7 @@
               <button type="button" data-mode="dark">Dark</button>
               <button type="button" data-mode="auto">Auto</button>
             </div>
-            <p class="hint">Applies at the next start. <button type="button" id="restartNow" class="textlink">Restart now</button></p>
+            <p class="hint">Applies at the next start. <button type="button" id="restartNow" class="quiet">Restart now</button></p>
           </div>
           <div class="field">
             <span class="name">Theme</span>
@@ -288,6 +289,15 @@
         </div>
       </section>
 
+      <!-- Version and updates are the whole app's, not one profile's (critique, Nov 14 2026). -->
+      <section class="panel" data-area="gamblium" aria-labelledby="gamblium-title">
+        <header><h2 id="gamblium-title">Gamblium</h2></header>
+        <div class="fields">
+          <dl class="kv" id="version"></dl>
+          <label class="check" title="A new version is downloaded in the background and installed when you restart"><input type="checkbox" id="autoUpdate"> Check for updates when Gamblium starts</label>
+        </div>
+      </section>
+
       <section class="panel" data-area="profile" aria-labelledby="profile-title">
         <header><h2 id="profile-title">This profile</h2></header>
         <div class="fields">
@@ -297,7 +307,6 @@
             <span class="hint">Shown in the popup and on saved sessions.</span>
           </label>
           <dl class="kv" id="about"></dl>
-          <label class="check" title="A new version is downloaded in the background and installed when you restart"><input type="checkbox" id="autoUpdate"> Check for updates when Gamblium starts</label>
         </div>
       </section>
     </div>

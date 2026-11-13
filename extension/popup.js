@@ -428,7 +428,7 @@ send({ type: 'update-state' }).then((u) => {
   const b = el('button', { type: 'button', role: 'menuitem', className: 'mrow update' }, [icon(ICON.update), el('span', { textContent: `Restart to update to ${versionLabel(u.update?.version) || 'the new version'}` }), el('kbd', {})]);
   b.addEventListener('click', async () => {
     if (!b.classList.contains('sure')) {
-      b.querySelector('span').textContent = 'Close every window and update?';
+      b.querySelector('span').textContent = 'Close every window and update? Your tabs come back.';
       b.classList.add('sure');
       return;
     }

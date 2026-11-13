@@ -269,7 +269,7 @@ async function loadProfile() {
   // "1.0.0 beta" (version_name) where there is one; the helper says "1.0.0-beta.1" for the same build.
   const shown = m.version_name || m.version;
   const sameBuild = (h) => String(h || '').replace(/-beta(\.\d+)?$/, ' beta') === shown || h === m.version;
-  const rows = [['Gamblium', `${shown} on Brave${brave ? ' ' + brave : ''}${chromium ? ` (Chromium ${chromium})` : ''}`]];
+  const rows = [['Version', `${shown} on Brave${brave ? ' ' + brave : ''}${chromium ? ` (Chromium ${chromium})` : ''}`]];
   if (ping.ok === false) rows.push(['Helper', 'not reachable; run "gamblium install-host"']);
   else {
     if (!sameBuild(ping.version)) rows.push(['Helper', ping.version]); // only worth a line when it differs
@@ -289,7 +289,10 @@ async function loadProfile() {
     rows.push(['Profile folder', folder ? [el('span', { className: 'mono path', textContent: folder }), open, copy] : "Brave's default folder"]);
   }
   if (ping.ok !== false) rows.splice(1, 0, ['Updates', updatesCell()]);
-  $('about').replaceChildren(...rows.flatMap(([k, v]) => [el('dt', { textContent: k }), el('dd', {}, v)]));
+  // Version, updates and the helper in the Gamblium section; this profile keeps its folder.
+  const kv = (list) => list.flatMap(([k, v]) => [el('dt', { textContent: k }), el('dd', {}, v)]);
+  $('version').replaceChildren(...kv(rows.filter(([k]) => k !== 'Profile folder')));
+  $('about').replaceChildren(...kv(rows.filter(([k]) => k === 'Profile folder')));
   showUpdate(await send({ type: 'update-state' }).catch(() => null));
 }
 
@@ -301,7 +304,7 @@ function updatesCell() {
   restart.addEventListener('click', async () => {
     if (restart.dataset.sure !== '1') {
       restart.dataset.sure = '1';
-      restart.textContent = 'Close every window and update?';
+      restart.textContent = 'Close every window and update? Your tabs come back.';
       return;
     }
     const r = await send({ type: 'update-restart' });
@@ -435,7 +438,7 @@ document.addEventListener('visibilitychange', () => {
 // ---- One view per area -------------------------------------------------------------
 // The address picks the area (settings.html#network). "#all" shows every area on
 // one page, which is what the tests and a search of the page (Ctrl+F) want.
-const AREAS = ['tabs', 'look', 'downloads', 'network', 'agents', 'profile', 'browser'];
+const AREAS = ['tabs', 'look', 'downloads', 'network', 'agents', 'gamblium', 'profile', 'browser'];
 function showArea() {
   const asked = location.hash.slice(1);
   const area = asked === 'all' ? 'all' : AREAS.includes(asked) ? asked : 'tabs';

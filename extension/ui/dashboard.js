@@ -134,7 +134,7 @@ function tabRow(r, max) {
   if (r.memoryMb !== null) mem.dataset.weight = weightOf(r.memoryMb);
   const acts = [];
   if (r.state !== 'asleep' && !r.active) acts.push(button('Sleep', () => act(() => chrome.tabs.discard(r.tabId), 'Tab put to sleep.'), 'quiet'));
-  acts.push(button('Close', () => act(() => chrome.tabs.remove(r.tabId), 'Tab closed.'), 'quiet'));
+  acts.push(button('Close', () => act(() => chrome.tabs.remove(r.tabId), 'Tab closed.'), 'danger'));
   const tr = el('tr', {}, [
     td(check, 'fit'),
     td(el('div', { className: 'who' }, [icon, el('div', {}, [link, el('span', { className: 'sub', textContent: where.join(' · ') })])]), 'clip'),

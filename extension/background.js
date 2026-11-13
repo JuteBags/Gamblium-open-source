@@ -2001,9 +2001,17 @@ async function updateCheck(force = false) {
   }
   return r;
 }
+// Restart to update closes every window one by one, and nothing would reopen them: so the tabs are
+// saved first as a session, and the next start (within 15 minutes) reopens it and forgets it again.
+const UPDATE_SESSION = "Before the update";
 async function updateRestart() {
+  const saved = await sessionSave({ name: UPDATE_SESSION, withPages: false }).catch(() => null);
+  if (saved && saved.ok !== false) await chrome.storage.local.set({ reopenAfterUpdate: { name: UPDATE_SESSION, at: Date.now() } });
   const r = await native({ type: "update-restart" });
-  if (!r || r.ok === false) return r;
+  if (!r || r.ok === false) {
+    await chrome.storage.local.remove("reopenAfterUpdate");
+    return r;
+  }
   // The updater installs once every window is closed, then starts Gamblium again.
   setTimeout(async () => { for (const w of await chrome.windows.getAll()) chrome.windows.remove(w.id).catch(() => {}); }, 400);
   return { ok: true };
@@ -2019,6 +2027,30 @@ async function updateOnStart() {
   if (autoUpdate !== false) updateCheck(true);
 }
 chrome.runtime.onStartup.addListener(() => { updateOnStart(); });
+// After Restart to update: the browser may reopen only the window closed last (its own "continue where
+// you left off"), or none. A few seconds after the worker starts (onStartup did not fire in a test),
+// every saved window that is not open again is reopened, the lone new tab window closed, and the
+// session forgotten.
+setTimeout(() => { reopenAfterUpdate().catch(() => {}); }, 4000);
+async function reopenAfterUpdate() {
+  const { reopenAfterUpdate: r } = await chrome.storage.local.get({ reopenAfterUpdate: null });
+  if (!r) return;
+  await chrome.storage.local.remove("reopenAfterUpdate");
+  const store = await sessionStore();
+  const s = store[r.name];
+  if (Date.now() - r.at > 15 * 60_000 || !isValidSession(s)) return sessionDelete({ name: r.name });
+  const isNewTab = (t) => /^chrome:\/\/newtab|^chrome-extension:\/\/[a-z]+\/newtab/.test(t.url || t.pendingUrl || "");
+  const before = await chrome.windows.getAll({ populate: true });
+  const open = new Set(before.flatMap((w) => (w.tabs || []).map((t) => t.url || t.pendingUrl)));
+  const missing = s.windows.filter((w) => !w.tabs.every((t) => open.has(t.url)));
+  if (missing.length) {
+    await saveSessions(withSession(store, { ...s, windows: missing }));
+    const done = await sessionRestore({ name: r.name }).catch(() => null);
+    // The window the browser opened by itself with only a new tab is not wanted beside the reopened ones.
+    if (done && done.ok !== false) for (const w of before) if ((w.tabs || []).every(isNewTab)) chrome.windows.remove(w.id).catch(() => {});
+  }
+  await sessionDelete({ name: r.name });
+}
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   const ours = _sender.origin ? _sender.origin === OUR_ORIGIN : String(_sender.url || "").startsWith(OUR_ORIGIN + "/");

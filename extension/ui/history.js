@@ -101,7 +101,7 @@ function row(h) {
   const open = button('New tab', () => chrome.tabs.create({ url: h.url, active: false }), 'quiet');
   open.title = 'Open in a new tab behind this one';
   open.setAttribute('aria-label', `Open ${h.title || h.url} in a new tab`);
-  const gone = button('Remove', () => remove(h), 'quiet');
+  const gone = button('Remove', () => remove(h), 'danger');
   gone.title = 'Remove from history (Undo for a few seconds)';
   gone.setAttribute('aria-label', `Remove ${h.title || h.url} from history`);
   return el('li', {}, [

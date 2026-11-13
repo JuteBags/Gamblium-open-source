@@ -193,6 +193,7 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .meter i, .progress i { display: block; height: 100%; background: var(--accent); }
 .progress { display: block; height: 4px; margin-top: 6px; border-radius: var(--radius-pill); background: var(--nested); overflow: hidden; }
 td.actions { text-align: right; white-space: nowrap; vertical-align: middle; }
+td.actions button + button { margin-left: 6px; }
 td .amount { display: inline-block; min-width: 60px; }
 .cmd { white-space: nowrap; }
 .field pre.code { margin-top: 4px; }
@@ -298,8 +299,8 @@ table.tabs tr.group th:first-child { padding-left: 8px; }
 .who > div { min-width: 0; }
 .who a, .who .sub { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fav { flex: none; border-radius: 3px; }
-/* Row actions stay out of the way until the row is pointed at or tabbed into. */
-table.tabs td.actions button { opacity: 0; transition: opacity var(--quick); }
+/* Row actions show at rest, a little dimmed so a long list stays calm; full on the row pointed at. */
+table.tabs td.actions button { opacity: 0.6; transition: opacity var(--quick); }
 table.tabs tr:hover td.actions button, table.tabs tr:focus-within td.actions button { opacity: 1; }
 @media (hover: none) { table.tabs td.actions button, .visits .acts button { opacity: 1; } }
 .empty button.quiet { text-decoration: underline; text-underline-offset: 3px; }
@@ -397,8 +398,19 @@ body::before {
   box-shadow: var(--shine);
 }
 .bar { background: color-mix(in srgb, var(--text) 3%, transparent); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); border-right-color: var(--rim); }
-button { background: color-mix(in srgb, var(--text) 5%, transparent); border-color: var(--rim); }
-button.quiet { background: transparent; }
+/* Buttons look like buttons (owner, Nov 14 2026; critique audit): every kind has a fill and a rim at
+   rest, a lighter fill on hover and a pressed state that sinks 1px. :where() keeps the states as weak as
+   the base rule, so segmented controls, menu rows and tiles keep their own looks.
+   - secondary (plain and .quiet): a 7% ink tint and the rim; 12% on hover; 18% pressed
+   - primary: the filled ink pill; darker pressed
+   - danger: the bad tint, for Remove, Close, Clear and choices that open a door (Always allow) */
+button, button.quiet { background: color-mix(in srgb, var(--text) 7%, transparent); border-color: var(--rim); }
+button.quiet { padding: 0 10px; }
+button:where(:hover), button.quiet:where(:hover) { background: color-mix(in srgb, var(--text) 12%, transparent); }
+button:where(:active), button.quiet:where(:active) { background: color-mix(in srgb, var(--text) 18%, transparent); transform: translateY(1px); }
+button.primary:where(:active) { background: color-mix(in srgb, var(--text) 74%, var(--bg)); transform: translateY(1px); }
+button.danger:where(:active) { background: color-mix(in srgb, var(--bad-bg) 62%, var(--bad-ink)); transform: translateY(1px); }
+button:disabled { transform: none; }
 button.primary { background: var(--text); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5), 0 6px 22px -8px color-mix(in srgb, var(--text) 55%, transparent); }
 input[type="text"], input[type="search"], input[type="number"], select, textarea { background: color-mix(in srgb, var(--bg) 55%, transparent); border-color: var(--rim); }
 pre.code { background: color-mix(in srgb, var(--bg) 60%, transparent); box-shadow: inset 0 0 0 1px var(--rim); }
@@ -594,8 +606,8 @@ tr[data-state="asleep"] .tablink { color: var(--text-muted); }
 .visits .what a { color: var(--text); text-decoration: none; }
 .visits .what a:hover { text-decoration: underline; }
 .visits .what .sub { color: var(--text-muted); font-size: 13px; }
-.visits .acts { display: flex; gap: 2px; }
-.visits .acts button { opacity: 0; }
+.visits .acts { display: flex; gap: 6px; }
+.visits .acts button { opacity: 0.6; }
 .visits li:hover .acts button, .visits li:focus-within .acts button { opacity: 1; }
 .more { display: flex; justify-content: center; margin-top: 14px; }
 .more:has([hidden]) { display: none; }
@@ -655,7 +667,7 @@ tr[data-state="asleep"] .tablink { color: var(--text-muted); }
 .keys .cname { display: flex; align-items: center; gap: 8px; font-weight: 500; }
 .keys .ckeys { display: flex; flex-wrap: wrap; gap: 8px; }
 .keys .cacts { display: flex; gap: 6px; justify-content: flex-end; }
-.keys .cacts .quiet { opacity: 0; }
+.keys .cacts .quiet { opacity: 0.6; }
 .keys li:hover .cacts .quiet, .keys li:focus-within .cacts .quiet, .keys li.waiting .cacts .quiet { opacity: 1; }
 .chord { display: inline-flex; gap: 4px; }
 .chord kbd, kbd { display: inline-grid; place-items: center; min-width: 26px; height: 26px; padding: 0 7px; border-radius: 8px; background-image: var(--sheen-2); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 26%, transparent), inset 0 0 0 1px var(--rim), 0 2px 0 rgb(0 0 0 / 0.5); font: 500 12px/1 var(--font-ui); color: var(--text); }
@@ -914,8 +926,8 @@ body[data-state="failed"] .pnow { color: var(--bad-ink); }
 .pfor { display: flex; align-items: center; gap: 8px; }
 .pfor .name { font-size: 13px; color: var(--text-muted); }
 .pfor .seg button { height: 32px; padding: 0 12px; color: var(--text); }
-.pchoose #always { margin-left: auto; color: var(--text-muted); }
-.pchoose #always[aria-pressed="true"] { color: var(--ok-ink); }
+.pchoose #always { margin-left: auto; }
+.pchoose #always[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--bad-ink); }
 .pfoot { margin: 0; }
 .pfoot a { color: inherit; }
 .permitseg { flex-wrap: wrap; }
