@@ -958,7 +958,7 @@ dependencies = [
 
 [[package]]
 name = "gamblium"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "chacha20poly1305",
  "clap",
@@ -976,7 +976,7 @@ dependencies = [
 
 [[package]]
 name = "gamblium-dl"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "clap",
  "librqbit",

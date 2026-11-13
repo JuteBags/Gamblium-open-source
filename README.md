@@ -3,9 +3,10 @@
 A lean desktop browser setup for Windows: very low idle CPU, low memory, private by
 default, with tools for authorised security testing.
 
-Gamblium is **built on Brave**. Today it runs the official, unmodified Brave binary
-and adds everything else from outside: a launcher, a companion extension, a theme
-and a set of command-line tools. Nothing in Brave is patched or renamed.
+Gamblium is **built on Brave**. It ships a copy of Brave's own release whose
+pictures, words and a few drawings in `chrome.dll` show Gamblium instead of Brave
+(see `NOTICE.md`), and adds the rest from outside: a launcher, a companion
+extension, a theme and a set of command-line tools.
 
 ## Install
 

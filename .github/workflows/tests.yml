@@ -1,7 +1,12 @@
-# Unit tests on every pull request (and by hand). Nothing is built for release here.
+# Unit tests on every push to main and every pull request (and by hand). Nothing is built here:
+# builds and installs happen on the owner's machine; release.yml builds only for a version tag.
+# The public repository (JuteBags/Gamblium-open-source) gets main as one sync commit per publish
+# (tools/publish-public.mjs), so a push there runs these tests with free Actions minutes.
 name: tests
 
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -33,6 +38,8 @@ jobs:
         run: node --test $(git ls-files 'extension/*.test.mjs' 'extension/**/*.test.mjs')
       - name: Command reference up to date (docs and the agent skill)
         run: node tools/gen-agent-docs.mjs --check
+      - name: Public export leaves out private files
+        run: node --test tools/publish-public.test.mjs
 
       - uses: actions/setup-python@v5
         with:

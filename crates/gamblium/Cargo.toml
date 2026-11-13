@@ -1,6 +1,6 @@
 [package]
 name = "gamblium"
-version = "0.7.1"
+version = "0.8.0"
 edition = "2021"
 description = "Gamblium companion CLI: process stats and launcher for the Brave base"
 license = "GPL-3.0-only"
