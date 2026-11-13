@@ -2,6 +2,8 @@ mod audit;
 mod capture;
 mod dl;
 mod host;
+mod pack;
+mod update;
 mod install;
 mod launch;
 mod permit;
@@ -95,6 +97,22 @@ enum Cmd {
     },
     /// Used by the helper: close one browser and start it again on the same
     /// profile folder, so a newly chosen theme shows.
+    /// Updates: check and download a newer release (--download), say where things stand
+    /// (--status), or install a downloaded one (--apply, run by the updater's own copy).
+    Update {
+        #[arg(long)]
+        download: bool,
+        #[arg(long)]
+        status: bool,
+        /// Install now if an update is ready and Gamblium is closed (the shortcut does this).
+        #[arg(long)]
+        apply_if_ready: bool,
+        #[arg(long, value_name = "INSTALLER")]
+        apply: Option<PathBuf>,
+        /// Start Gamblium after installing.
+        #[arg(long)]
+        start: bool,
+    },
     #[command(hide = true)]
     Relaunch {
         #[arg(long)]
@@ -451,6 +469,41 @@ fn main() {
                     eprintln!("error: {e}");
                     std::process::exit(1);
                 }
+            }
+        }
+        Cmd::Update { download, status, apply_if_ready, apply, start } => {
+            // GAMBLIUM_UPDATE_AS: act as another version (tests only: lets a check find an older release).
+            let pretend = std::env::var("GAMBLIUM_UPDATE_AS").ok();
+            let current = pretend.as_deref().unwrap_or(env!("CARGO_PKG_VERSION"));
+            if let Some(installer) = apply {
+                if let Err(e) = update::apply(&installer, start) {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            } else if apply_if_ready {
+                // Exit 0: the update is being installed (and will start Gamblium); 3: nothing to do.
+                let open = install::profile_dir().is_some_and(|p| procs::browser_running("brave.exe", Some(&p)));
+                match update::ready_installer(current) {
+                    Some(installer) if !open => match update::start_apply(&installer, true) {
+                        Ok(()) => println!("installing the update; Gamblium starts when it is done"),
+                        Err(e) => {
+                            eprintln!("error: {e}");
+                            std::process::exit(3);
+                        }
+                    },
+                    _ => std::process::exit(3),
+                }
+            } else if download {
+                match update::check_and_download(current) {
+                    Ok(v) => println!("{v}"),
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                let _ = status;
+                println!("{}", serde_json::json!({ "current": current, "update": update::state() }));
             }
         }
         Cmd::Relaunch { pid, user_data_dir } => {

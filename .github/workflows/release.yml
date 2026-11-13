@@ -8,6 +8,7 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
   workflow_dispatch:
 
 permissions:
@@ -30,8 +31,10 @@ jobs:
             have=$(grep -m1 '^version' "$file" | cut -d'"' -f2)
             [ "$have" = "$tag" ] || { echo "::error::$file says $have, the tag says $tag"; exit 1; }
           done
+          # Extensions take numbers only: 1.0.0-beta.1 is "version": "1.0.0" with "version_name": "1.0.0 beta".
           have=$(grep -m1 '"version"' extension/manifest.json | cut -d'"' -f4)
-          [ "$have" = "$tag" ] || { echo "::error::extension/manifest.json says $have, the tag says $tag"; exit 1; }
+          [ "$have" = "${tag%%-*}" ] || { echo "::error::extension/manifest.json says $have, the tag says $tag"; exit 1; }
+          case "$tag" in *-beta*) grep -q "\"version_name\": \"${tag%%-*} beta\"" extension/manifest.json || { echo "::error::a beta tag needs version_name ${tag%%-*} beta in extension/manifest.json"; exit 1; };; esac
           echo "VERSION=$tag" >> "$GITHUB_ENV"
 
       - uses: Swatinem/rust-cache@v2
@@ -139,5 +142,5 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" \
             "dist/Gamblium-Setup-$VERSION.exe" dist/SHA256SUMS.txt \
-            --title "Gamblium $VERSION" \
+            --title "Gamblium $VERSION" $([[ "$VERSION" == *-* ]] && echo --prerelease) \
             --notes "Gamblium $VERSION for Windows (x64). Download Gamblium-Setup-$VERSION.exe and run it: it installs Gamblium, its browser included, for your Windows user (no admin rights) and starts it. Nothing else needs to be installed. Uninstall from Settings > Apps (your profile is kept). The installer is not code-signed yet, so Windows may warn about an unknown publisher (More info > Run anyway). SHA256SUMS.txt holds its checksum."

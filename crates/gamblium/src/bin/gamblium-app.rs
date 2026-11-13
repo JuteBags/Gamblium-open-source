@@ -30,6 +30,20 @@ fn main() {
             return;
         }
     }
+    // A downloaded update is installed first while Gamblium is closed; the updater then starts
+    // Gamblium itself (exit 0). Anything else (3: nothing ready) starts it as usual.
+    if extra.is_empty() {
+        let mut up = Command::new(dir.join("gamblium.exe"));
+        up.args(["update", "--apply-if-ready"]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            up.creation_flags(0x0800_0000);
+        }
+        if up.status().is_ok_and(|s| s.success()) {
+            return;
+        }
+    }
     let mut cmd = Command::new(dir.join("gamblium.exe"));
     cmd.arg("launch").arg("--user-data-dir").arg(profile);
     // The starting look, until the owner picks a scheme. A shortcut that passes

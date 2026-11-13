@@ -367,7 +367,17 @@ async function loadClosed() {
     const closed = await chrome.sessions.getRecentlyClosed({ maxResults: 11 });
     const now = Date.now();
     const items = [];
-    for (const c of closed) {
+    // Closed tab groups (kept by the extension; the browser's list has none), in time order with the rest.
+    const groups = (await send({ type: 'closed-groups' }))?.groups ?? [];
+    // A closed group's own tabs are not listed again under it (closing the group closed them).
+    const inGroup = (c) => c.tab && groups.some((g) => Math.abs(g.at - (c.lastModified ?? 0) * 1000) < 10_000 && g.tabs.some((t) => t.url === c.tab.url));
+    const rows = [...closed.filter((c) => !inGroup(c)).map((c) => ({ at: (c.lastModified ?? 0) * 1000, c })), ...groups.map((g) => ({ at: g.at, g }))].sort((a, b) => b.at - a.at).slice(0, 11);
+    for (const { at, c, g } of rows) {
+      if (g) {
+        const n = g.tabs.length;
+        items.push(row({ icon: glyph(GLYPH.window), text: `${g.title || 'Group'} · ${n} tab${n === 1 ? '' : 's'}`, note: ago(at, now), title: 'Reopen this group as it was', act: () => send({ type: 'group-reopen', id: g.id }).then(loadClosed) }));
+        continue;
+      }
       const when = ago((c.lastModified ?? 0) * 1000, now);
       if (c.tab && /^https?:/i.test(c.tab.url ?? '')) {
         items.push(row({ icon: favicon(c.tab.url), text: c.tab.title || hostOf(c.tab.url), note: when, title: `Reopen ${c.tab.url}`, act: () => chrome.sessions.restore(c.tab.sessionId) }));

@@ -1,7 +1,8 @@
 {
   "name": "new-profile",
   "preferences": {
-    "bookmark_bar.visibility_state": 2,
+    "bookmark_bar.visibility_state": 0,
+    "bookmark_bar.show_tab_groups": true,
     "brave.new_tab_page.show_background_image": true,
     "brave.new_tab_page.background": {
       "type": "color",

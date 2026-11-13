@@ -333,7 +333,8 @@ class SettingsWithVersion(unittest.TestCase):
         self.assertEqual(again, new)
 
     def test_the_version_comes_from_the_extension_manifest(self):
-        self.assertRegex(X.gamblium_version(Path(__file__).resolve().parents[2] / "branding"), r"^\d+\.\d+\.\d+$")
+        # version_name ("1.0.0 beta") when the manifest has one, else the plain version.
+        self.assertRegex(X.gamblium_version(Path(__file__).resolve().parents[2] / "branding"), r"^\d+\.\d+\.\d+( beta)?$")
         self.assertIsNone(X.gamblium_version("Z:/nowhere/branding"))
 
 

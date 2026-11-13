@@ -565,3 +565,11 @@ test('every interrupted download says why in words, never a raw code', () => {
     assert.ok(!/_/.test(v.status) && !/mismatch/i.test(v.status), `${error}: ${v.status}`);
   }
 });
+
+test('versionLabel: the semver of the helper read as people read it', async () => {
+  const { versionLabel } = await import('./pages-logic.js');
+  assert.equal(versionLabel('1.0.0-beta.2'), '1.0.0 beta 2');
+  assert.equal(versionLabel('1.0.0-beta'), '1.0.0 beta');
+  assert.equal(versionLabel('1.2.0'), '1.2.0');
+  assert.equal(versionLabel(undefined), '');
+});

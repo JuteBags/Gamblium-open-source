@@ -3,7 +3,7 @@
 // It reads once when opened and after each action; nothing runs on a timer.
 import { DEFAULTS, describeTemp } from './rules.js';
 import { $, send, el, openPage } from './ui/page.js';
-import { zoomStep, zoomLabel, fmtMb, fmtDelay, countStates, stateShares, statesLine, cleanHost, parseHosts, hostListed, toggleHost, stateOf, filterTabs, siteLabel, markdownLink, secureChip } from './ui/pages-logic.js';
+import { zoomStep, zoomLabel, fmtMb, fmtDelay, countStates, stateShares, statesLine, cleanHost, parseHosts, hostListed, toggleHost, stateOf, filterTabs, siteLabel, markdownLink, secureChip, versionLabel } from './ui/pages-logic.js';
 
 let current = null; // the tab the popup was opened on
 let host = '';
@@ -307,6 +307,7 @@ const ICON = {
   help: 'M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM8 8a2 2 0 1 1 2.800 1.800c-.5.300-.8.700-.8 1.300v.4M10 14v.010',
   settings: 'M10 7.200a2.800 2.800 0 1 0 0 5.600 2.800 2.800 0 0 0 0-5.600zM10 3v1.600M10 15.400V17M3 10h1.600M15.400 10H17M5 5l1.100 1.100M13.900 13.900 15 15M5 15l1.100-1.100M13.900 6.100 15 5',
   exit: 'M8 4H5.500A1.500 1.500 0 0 0 4 5.500v9A1.500 1.500 0 0 0 5.500 16H8M12 6.500 15.500 10 12 13.500M15.500 10H8',
+  update: 'M10 15.500v-11M5.500 9 10 4.500 14.500 9',
 };
 // A row: [go, label, keys, icon?]. A flyout: { label, icon, sub: [rows] } (sub may be a function, read when it opens).
 const MENU = [
@@ -420,6 +421,22 @@ $('flyout').addEventListener('keydown', (e) => {
 });
 const zoomRow = document.querySelector('#viewMenu .zoom');
 $('menuRows').replaceChildren(...MENU.map((m) => (m === 'zoom' ? zoomRow : row(m))));
+// A downloaded update (the toolbar button wears a blue arrow): "Restart to update" heads the Menu.
+// Restarting closes every window, so it asks once, in place, like Exit.
+send({ type: 'update-state' }).then((u) => {
+  if (!u || u.ok === false || !u.ready) return;
+  const b = el('button', { type: 'button', role: 'menuitem', className: 'mrow update' }, [icon(ICON.update), el('span', { textContent: `Restart to update to ${versionLabel(u.update?.version) || 'the new version'}` }), el('kbd', {})]);
+  b.addEventListener('click', async () => {
+    if (!b.classList.contains('sure')) {
+      b.querySelector('span').textContent = 'Close every window and update?';
+      b.classList.add('sure');
+      return;
+    }
+    const r = await send({ type: 'update-restart' });
+    if (!r || r.ok === false) say(r?.error || 'The update could not start.');
+  });
+  $('menuRows').prepend(b, el('hr', {}));
+}).catch(() => {});
 // Arrow keys move through the rows.
 $('viewMenu').addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;

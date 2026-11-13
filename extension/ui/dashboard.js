@@ -174,7 +174,59 @@ function renderTabs() {
   }
 }
 
+// Memory and processor per tab group, and a limit for each named group: over it, the group's
+// hidden tabs are put to sleep (memory) or frozen (processor) by the minute check.
+let limitEditing = null; // the title of the group whose limit is being edited
+function limitEditor(g) {
+  const num = (id, value, max, step) => el('input', { type: 'number', id, min: 0, max, step, value: value ?? '', placeholder: 'none', inputMode: 'numeric' });
+  const mb = num('limMb', g.limit?.memoryMb, 65536, 50);
+  const cpu = num('limCpu', g.limit?.cpuPct, 1200, 5);
+  const done = () => { limitEditing = null; read({ keepTable: true }); };
+  const save = async (memoryMb, cpuPct) => {
+    const r = await send({ type: 'group-limit-set', title: g.title, memoryMb, cpuPct });
+    if (r?.ok === false) { $('did').textContent = r.error; return; }
+    done();
+  };
+  const form = el('form', { className: 'limitform' }, [
+    el('label', {}, ['Memory ', mb, ' MB']),
+    el('label', {}, ['Processor ', cpu, ' % of a core']),
+    el('button', { type: 'submit', className: 'primary', textContent: 'Save' }),
+    g.limit ? el('button', { type: 'button', className: 'textlink', textContent: 'No limit' }) : '',
+    el('button', { type: 'button', className: 'textlink', textContent: 'Cancel' }),
+  ]);
+  form.addEventListener('submit', (e) => { e.preventDefault(); save(Number(mb.value) || 0, Number(cpu.value) || 0); });
+  form.addEventListener('click', (e) => {
+    if (e.target.textContent === 'No limit') save(0, 0);
+    if (e.target.textContent === 'Cancel') done();
+  });
+  form.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); done(); } });
+  setTimeout(() => mb.focus(), 0);
+  return el('tr', { className: 'limitedit' }, el('td', { colSpan: 5 }, form));
+}
+
+function renderGroups(stats) {
+  // While a limit is being typed, the 5-second refresh leaves the table alone (it would take the focus).
+  if (limitEditing && $('groups').querySelector('.limitedit')) return;
+  const groups = stats.ok ? stats.groups || [] : [];
+  $('groupsPanel').hidden = groups.length === 0;
+  if (!groups.length) return;
+  const head = el('tr', {}, ['Group', 'Tabs', 'Memory', 'Processor', 'Limit'].map((t, i) => el('th', { className: i ? 'num' : '', textContent: t, scope: 'col' })));
+  const body = groups.map((g) => {
+    const limit = el('button', { type: 'button', className: 'quiet', textContent: g.limit ? [g.limit.memoryMb && fmtMb(g.limit.memoryMb), g.limit.cpuPct && `${g.limit.cpuPct}%`].filter(Boolean).join(' · ') : 'Set', title: g.title ? 'Memory (MB) and processor (% of a core) this group may use' : 'Name the group to give it a limit', disabled: !g.title });
+    limit.setAttribute('aria-expanded', String(limitEditing === g.title));
+    limit.addEventListener('click', () => {
+      limitEditing = limitEditing === g.title ? null : g.title;
+      $('groups').querySelector('.limitedit')?.remove();
+      renderGroups(stats);
+    });
+    const tr = el('tr', {}, [td(el('span', { className: `gdot g-${g.color}`, textContent: g.title || 'Unnamed group' })), td(`${g.awake}/${g.tabs}`, 'num'), td(fmtMb(g.memoryMb), 'num'), td(fmtPct(g.cpuPct), 'num'), td(limit, 'num')]);
+    return limitEditing === g.title ? [tr, limitEditor(g)] : [tr];
+  }).flat();
+  $('groups').replaceChildren(el('div', { className: 'tablewrap' }, el('table', {}, [el('thead', {}, head), el('tbody', {}, body)])));
+}
+
 function renderSide(stats, status) {
+  renderGroups(stats);
   if (stats.ok) {
     const body = kindRows(stats.kinds).map((k) => el('tr', {}, [td(k.name), td(String(k.processes), 'num'), td(fmtMb(k.memoryMb), 'num'), td(fmtPct(k.cpuPct), 'num')]));
     const head = el('tr', {}, [el('th', { textContent: 'Part', scope: 'col' }), el('th', { className: 'num', textContent: 'Processes', scope: 'col' }), el('th', { className: 'num', textContent: 'Memory', scope: 'col' }), el('th', { className: 'num', textContent: 'Processor', scope: 'col' })]);

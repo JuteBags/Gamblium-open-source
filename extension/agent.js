@@ -834,7 +834,7 @@ export function makeCtl(deps) {
       const m = chrome.runtime.getManifest();
       const helper = await deps.native({ type: "ping" });
       return {
-        ok: true, extension: m.version, name: m.name, agentProfile: (m.host_permissions || []).includes("<all_urls>"),
+        ok: true, extension: m.version_name || m.version, name: m.name, agentProfile: (m.host_permissions || []).includes("<all_urls>"),
         pageAccess: await chrome.permissions.contains({ origins: ["<all_urls>"] }),
         cookies: !!chrome.cookies, realInput: !!chrome.debugger, hidden: /Headless/.test(navigator.userAgent), helper: helper.ok ? helper.version : null, browserPid: helper.browserPid ?? null,
         profile: await deps.profileInfo(), commands: Object.keys(OPS).length,

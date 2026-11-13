@@ -107,6 +107,17 @@
         </div>
       </section>
 
+      <!-- Tab groups (owner, Nov 14 2026: the strip runs out of room). One switch, one line. -->
+      <section class="panel" data-area="tabs" aria-labelledby="groups-title">
+        <header><h2 id="groups-title">Tab groups</h2></header>
+        <div class="fields">
+          <div class="field">
+            <label class="check"><input type="checkbox" id="foldGroups"> Fold the other groups when you open a tab in one</label>
+            <p class="hint">A folded group shows only its name; click its name to unfold it.</p>
+          </div>
+        </div>
+      </section>
+
       <section class="panel" data-area="look" aria-labelledby="look-title">
         <header><h2 id="look-title">Appearance</h2></header>
         <div class="fields">
@@ -286,6 +297,7 @@
             <span class="hint">Shown in the popup and on saved sessions.</span>
           </label>
           <dl class="kv" id="about"></dl>
+          <label class="check" title="A new version is downloaded in the background and installed when you restart"><input type="checkbox" id="autoUpdate"> Check for updates when Gamblium starts</label>
         </div>
       </section>
     </div>

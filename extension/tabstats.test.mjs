@@ -75,3 +75,24 @@ test("proxy settings are validated and round-trip", () => {
     assert.equal(proxyConfig(bad).ok, false, JSON.stringify(bad));
   }
 });
+
+import { groupTotals, groupLimitPlan } from "./tabstats.js";
+const grow = (tabId, groupId, memoryMb, cpuPct, extra = {}) => ({ tabId, groupId, memoryMb, cpuPct, state: "awake", active: false, audible: false, ...extra });
+test("groupTotals adds up each group, heaviest first", () => {
+  const rows = [grow(1, 10, 100, 1.5), grow(2, 10, 50, 0.5), grow(3, 20, 400, null), grow(4, -1, 999, 9)];
+  const g = groupTotals(rows, [{ id: 10, title: "Research", color: "blue" }, { id: 20, title: "Work", color: "red" }]);
+  assert.deepEqual(g.map((x) => [x.title, x.tabs, x.memoryMb, x.cpuPct]), [["Work", 1, 400, null], ["Research", 2, 150, 2]]);
+});
+test("groupLimitPlan sleeps the biggest hidden tabs of a group over its memory, never the one on screen", () => {
+  const rows = [grow(1, 10, 300, 0, { active: true }), grow(2, 10, 200, 0), grow(3, 10, 150, 0), grow(4, 10, 10, 0, { audible: true })];
+  const plan = groupLimitPlan(rows, [{ id: 10, title: "Research" }], { Research: { memoryMb: 470 } });
+  assert.deepEqual(plan.sleep, [2]);
+  assert.deepEqual(groupLimitPlan(rows, [{ id: 10, title: "Research" }], { Research: { memoryMb: 100 } }).sleep, [2, 3]);
+  assert.deepEqual(groupLimitPlan(rows, [{ id: 10, title: "Research" }], {}).sleep, []);
+});
+test("groupLimitPlan freezes the busiest hidden tabs of a group over its processor limit; kept-awake tabs stay", () => {
+  const rows = [grow(1, 10, 10, 6), grow(2, 10, 10, 4), grow(3, 10, 10, 1)];
+  const plan = groupLimitPlan(rows, [{ id: 10, title: "Work" }], { Work: { cpuPct: 5 } });
+  assert.deepEqual(plan.freeze, [1]);
+  assert.deepEqual(groupLimitPlan(rows, [{ id: 10, title: "Work" }], { Work: { cpuPct: 5 } }, new Set([1])).freeze, [2, 3]);
+});

@@ -30,7 +30,7 @@ export function attribute(tabs, framesByTab, reading, previous) {
     const procs = procsOf.get(t.id);
     const state = t.discarded ? "asleep" : t.frozen ? "frozen" : "awake";
     if (!procs.length) {
-      return { tabId: t.id, windowId: t.windowId, title: t.title || "", url: t.url || "", state, active: !!t.active, audible: !!t.audible, memoryMb: null, cpuPct: null, shared: false, pids: [] };
+      return { tabId: t.id, windowId: t.windowId, groupId: t.groupId ?? -1, title: t.title || "", url: t.url || "", state, active: !!t.active, audible: !!t.audible, memoryMb: null, cpuPct: null, shared: false, pids: [] };
     }
     let memory = 0;
     let cpu = 0;
@@ -43,7 +43,7 @@ export function attribute(tabs, framesByTab, reading, previous) {
       else cpu += c / share;
     }
     return {
-      tabId: t.id, windowId: t.windowId, title: t.title || "", url: t.url || "", state, active: !!t.active, audible: !!t.audible,
+      tabId: t.id, windowId: t.windowId, groupId: t.groupId ?? -1, title: t.title || "", url: t.url || "", state, active: !!t.active, audible: !!t.audible,
       memoryMb: Math.round(memory / MB), cpuPct: cpuKnown ? Math.round(cpu * 10) / 10 : null,
       shared: procs.some((p) => users.get(p.pid) > 1), pids: procs.map((p) => p.pid),
     };
@@ -75,6 +75,57 @@ export function attribute(tabs, framesByTab, reading, previous) {
     kinds,
     total: { processes: reading.processes.length, memoryMb: Math.round(totalMemory), cpuPct: cpuKnown ? Math.round(totalCpu * 10) / 10 : null },
   };
+}
+
+// Memory and processor per tab group (owner, Nov 14 2026).
+//   rows:   attribute(...).tabs
+//   groups: chrome.tabGroups.query({}) results ({ id, title, color, collapsed })
+// -> [{ groupId, title, color, tabs, awake, memoryMb, cpuPct }], heaviest first. A group's CPU is
+// null when no awake tab of it has a known figure yet.
+export function groupTotals(rows, groups) {
+  return groups
+    .map((g) => {
+      const mine = rows.filter((r) => r.groupId === g.id);
+      const known = mine.filter((r) => r.cpuPct !== null && r.cpuPct !== undefined);
+      return {
+        groupId: g.id, title: g.title || "", color: g.color || "grey", tabs: mine.length, awake: mine.filter((r) => r.state === "awake").length,
+        memoryMb: mine.reduce((sum, r) => sum + (r.memoryMb || 0), 0),
+        cpuPct: known.length ? Math.round(known.reduce((sum, r) => sum + r.cpuPct, 0) * 10) / 10 : null,
+      };
+    })
+    .sort((a, b) => b.memoryMb - a.memoryMb);
+}
+
+// What to do when a group goes over the limits set for it (by the group's name, since group ids
+// change across restarts). limits: { [title]: { memoryMb?, cpuPct? } }.
+// Over its memory: its hidden tabs are put to sleep, biggest first, until it is under.
+// Over its processor: its hidden awake tabs are frozen, busiest first, until it is under.
+// Tabs on screen, playing sound or kept awake are never touched.
+// -> { sleep: [tabId], freeze: [tabId] }
+export function groupLimitPlan(rows, groups, limits, keepAwake = new Set()) {
+  const plan = { sleep: [], freeze: [] };
+  for (const g of groupTotals(rows, groups)) {
+    const lim = limits && g.title ? limits[g.title] : null;
+    if (!lim) continue;
+    const movable = rows.filter((r) => r.groupId === g.groupId && r.state !== "asleep" && !r.active && !r.audible && !keepAwake.has(r.tabId));
+    if (lim.memoryMb > 0 && g.memoryMb > lim.memoryMb) {
+      let over = g.memoryMb - lim.memoryMb;
+      for (const r of [...movable].sort((a, b) => (b.memoryMb || 0) - (a.memoryMb || 0))) {
+        if (over <= 0) break;
+        plan.sleep.push(r.tabId);
+        over -= r.memoryMb || 0;
+      }
+    }
+    if (lim.cpuPct > 0 && g.cpuPct !== null && g.cpuPct > lim.cpuPct) {
+      let over = g.cpuPct - lim.cpuPct;
+      for (const r of movable.filter((x) => x.state === "awake" && !plan.sleep.includes(x.tabId)).sort((a, b) => (b.cpuPct || 0) - (a.cpuPct || 0))) {
+        if (over <= 0) break;
+        plan.freeze.push(r.tabId);
+        over -= r.cpuPct || 0;
+      }
+    }
+  }
+  return plan;
 }
 
 // Turns what the user typed into a chrome.proxy setting, or an error.

@@ -6,19 +6,19 @@
   "theme": {
     "colors": {
       "frame": [
-        3,
-        3,
-        4
+        12,
+        16,
+        23
       ],
       "frame_inactive": [
-        3,
-        3,
-        4
+        9,
+        12,
+        17
       ],
       "toolbar": [
-        13,
-        14,
-        16
+        22,
+        28,
+        37
       ],
       "tab_text": [
         228,
@@ -26,14 +26,14 @@
         235
       ],
       "tab_background_text": [
-        138,
-        139,
-        143
+        136,
+        142,
+        152
       ],
       "tab_background_text_inactive": [
-        104,
-        105,
-        108
+        91,
+        95,
+        102
       ],
       "bookmark_text": [
         157,
@@ -51,9 +51,9 @@
         235
       ],
       "omnibox_background": [
-        23,
-        24,
-        27
+        30,
+        36,
+        46
       ],
       "omnibox_text": [
         228,

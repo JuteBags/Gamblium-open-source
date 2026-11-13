@@ -8,7 +8,7 @@ import {
   capturePage, cleanName, isValidSession, placement, restorePage, snapshot, summaries, withSession, withoutSession,
   findInSessions, sessionsByUrl,
 } from "./sessions.js";
-import { attribute, proxyConfig, proxySummary } from "./tabstats.js";
+import { attribute, proxyConfig, proxySummary, groupTotals, groupLimitPlan } from "./tabstats.js";
 import { adoptIds, emptyIdMaps, firstId, makeCtl, noteReplaced } from "./agent.js";
 import { pack, unpack } from "./pack.js";
 import { freeColour, listSpaces, nextSpace, switchPlan } from "./spaces.js";
@@ -863,6 +863,7 @@ chrome.runtime.onStartup.addListener(arm);
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name !== ALARM) return;
   check();
+  enforceGroupLimits().catch(() => {});
   bridgeEnsure(); // reconnect if the helper went away
 });
 
@@ -1382,7 +1383,7 @@ async function sessionImport({ session }) {
 
 const NATIVE_HOST = "com.gamblium.host";
 const NATIVE_TYPES = new Set([
-  "ping", "stats", "freeze", "thaw", "trim", "lift-extension", "brand-get", "brand-set", "restart", "dl-start", "dl-list", "dl-cancel", "dl-resume", "dl-forget", "dl-action", "open-folder", "open-tor", "capture-window", "capture-piece", "seal", "open", "named-sessions", "permit-check", "permit-get", "permit-set", "scope-list", "scope-add", "scope-check", "audit", "scan", "cve",
+  "ping", "stats", "freeze", "thaw", "trim", "lift-extension", "brand-get", "brand-set", "restart", "dl-start", "dl-list", "dl-cancel", "dl-resume", "dl-forget", "dl-action", "open-folder", "open-tor", "update-check", "update-status", "update-restart", "capture-window", "capture-piece", "seal", "open", "named-sessions", "permit-check", "permit-get", "permit-set", "scope-list", "scope-add", "scope-check", "audit", "scan", "cve",
 ]);
 
 async function native(request) {
@@ -1501,7 +1502,24 @@ async function tabStats() {
   );
   const result = attribute(tabs, framesByTab, reading, previousReading);
   previousReading = { at_ms: reading.at_ms, processes: reading.processes.map((p) => ({ pid: p.pid, cpu_ms: p.cpu_ms })) };
-  return { ok: true, ...result, systemAvailableMb: reading.system_available_mb };
+  const tabGroups = chrome.tabGroups ? await chrome.tabGroups.query({}).catch(() => []) : [];
+  const { groupLimits = {} } = await chrome.storage.local.get({ groupLimits: {} });
+  const groups = groupTotals(result.tabs, tabGroups).map((g) => ({ ...g, limit: (g.title && groupLimits[g.title]) || null }));
+  return { ok: true, ...result, groups, systemAvailableMb: reading.system_available_mb };
+}
+
+// Limits per tab group (by name), checked with the minute alarm while any limit is set: a group
+// over its memory has its hidden tabs put to sleep, over its processor has them frozen.
+async function enforceGroupLimits() {
+  const { groupLimits = {} } = await chrome.storage.local.get({ groupLimits: {} });
+  if (!Object.keys(groupLimits).length || !chrome.tabGroups) return;
+  const stats = await tabStats();
+  if (!stats.ok) return;
+  const tabGroups = await chrome.tabGroups.query({}).catch(() => []);
+  const plan = groupLimitPlan(stats.tabs, tabGroups, groupLimits, new Set(await awakeTabs()));
+  for (const id of plan.sleep) await chrome.tabs.discard(id).catch(() => null);
+  for (const id of plan.freeze) await setLifecycle(id, "frozen");
+  if (plan.sleep.length || plan.freeze.length) await chrome.storage.local.set({ groupLimitLog: { at: new Date().toISOString(), ...plan } });
 }
 
 // ---- Proxy ----------------------------------------------------------------------
@@ -1915,6 +1933,93 @@ async function menuDo(msg, sender) {
 const OUR_ORIGIN = new URL(chrome.runtime.getURL("")).origin;
 const FROM_A_PAGE = new Set(["menu-open", "menu-do"]);
 
+// ---- Closed tab groups (owner, Nov 14 2026) ------------------------------------------
+// The browser's own "recently closed" list has tabs and windows, not groups. So the extension
+// keeps a picture of every group (name, colour, its tabs in order) and, when a group goes away
+// because its tabs were closed (not ungrouped, not its whole window), keeps it in
+// storage.local.closedGroups (newest first, at most 10). New Tab's Recently closed lists them;
+// a click reopens the group as it was.
+const groupShape = new Map(); // groupId -> { title, color, windowId, tabs: [{ url, title, pinned }] }
+async function noteGroup(groupId) {
+  if (typeof groupId !== "number" || groupId < 0 || !chrome.tabGroups) return;
+  const g = await chrome.tabGroups.get(groupId).catch(() => null);
+  if (!g) return;
+  const tabs = (await chrome.tabs.query({ groupId }).catch(() => [])).sort((a, b) => a.index - b.index);
+  groupShape.set(groupId, { title: g.title || "", color: g.color, windowId: g.windowId, ids: tabs.map((t) => t.id), tabs: tabs.filter((t) => /^https?:/.test(t.url || t.pendingUrl || "")).map((t) => ({ url: t.url || t.pendingUrl, title: t.title || "", pinned: !!t.pinned })) });
+}
+async function noteAllGroups() {
+  if (!chrome.tabGroups) return;
+  for (const g of await chrome.tabGroups.query({}).catch(() => [])) await noteGroup(g.id);
+}
+if (chrome.tabGroups) {
+  chrome.tabGroups.onCreated.addListener((g) => noteGroup(g.id));
+  chrome.tabGroups.onUpdated.addListener((g) => noteGroup(g.id));
+  chrome.tabGroups.onRemoved.addListener(async (g) => {
+    const shape = groupShape.get(g.id);
+    groupShape.delete(g.id);
+    if (!shape || !shape.tabs.length) return;
+    // Its window closing takes its groups with it: that is the browser's own "window" entry.
+    await new Promise((r) => setTimeout(r, 400));
+    if (!(await chrome.windows.get(shape.windowId).catch(() => null))) return;
+    // Ungrouped, not closed: its tabs are still open.
+    const still = await Promise.all(shape.ids.map((id) => chrome.tabs.get(id).catch(() => null)));
+    if (still.some(Boolean)) return;
+    const { closedGroups = [] } = await chrome.storage.local.get({ closedGroups: [] });
+    const entry = { id: `${Date.now()}-${g.id}`, at: Date.now(), title: shape.title, color: shape.color, tabs: shape.tabs };
+    await chrome.storage.local.set({ closedGroups: [entry, ...closedGroups].slice(0, 10) });
+  });
+}
+chrome.tabs.onUpdated.addListener((_id, change, tab) => { if (tab.groupId >= 0 && (change.url || change.title || "groupId" in change || change.pinned !== undefined)) noteGroup(tab.groupId); });
+chrome.tabs.onMoved.addListener(async (id) => { const t = await chrome.tabs.get(id).catch(() => null); if (t && t.groupId >= 0) noteGroup(t.groupId); });
+noteAllGroups();
+
+/** Reopens a closed group in the given window (or the last focused one), as it was. */
+async function reopenGroup(entryId, windowId) {
+  const { closedGroups = [] } = await chrome.storage.local.get({ closedGroups: [] });
+  const e = closedGroups.find((x) => x.id === entryId);
+  if (!e) return { ok: false, error: "that group is no longer in the list" };
+  const win = windowId ?? (await chrome.windows.getLastFocused({ windowTypes: ["normal"] }).catch(() => null))?.id;
+  const ids = [];
+  for (const t of e.tabs) ids.push((await chrome.tabs.create({ url: t.url, active: false, pinned: false, ...(win ? { windowId: win } : {}) })).id);
+  const groupId = await chrome.tabs.group({ tabIds: ids, ...(win ? { createProperties: { windowId: win } } : {}) });
+  await chrome.tabGroups.update(groupId, { title: e.title, ...(e.color ? { color: e.color } : {}) }).catch(() => {});
+  await chrome.tabs.update(ids[0], { active: true }).catch(() => {});
+  await chrome.storage.local.set({ closedGroups: closedGroups.filter((x) => x.id !== entryId) });
+  return { ok: true, groupId, tabs: ids.length };
+}
+
+// ---- Updates (owner, Nov 14 2026) ---------------------------------------------------------
+// At start and every 6 hours the helper checks the public repository's releases and downloads a
+// newer one in the background. When one is ready, our toolbar button shows a mark and our pages
+// can offer "Restart to update" (update-state, update-restart).
+async function updateCheck(force = false) {
+  const r = await native({ type: "update-check", force });
+  if (r && r.ready) {
+    chrome.action.setBadgeText({ text: "↑" }).catch(() => {});
+    chrome.action.setBadgeBackgroundColor({ color: "#3B82F6" }).catch(() => {});
+    chrome.action.setTitle({ title: `Gamblium: version ${r.update?.version} is ready. Restart to update.` }).catch(() => {});
+  }
+  return r;
+}
+async function updateRestart() {
+  const r = await native({ type: "update-restart" });
+  if (!r || r.ok === false) return r;
+  // The updater installs once every window is closed, then starts Gamblium again.
+  setTimeout(async () => { for (const w of await chrome.windows.getAll()) chrome.windows.remove(w.id).catch(() => {}); }, 400);
+  return { ok: true };
+}
+// Once each time Gamblium starts, no polling (owner, Nov 14 2026): if a newer version is there it
+// is downloaded now and installed at the next start (or at once with Restart to update);
+// otherwise nothing happens until the next start. Settings can switch this off
+// (storage.local.autoUpdate = false); "Check for updates" still works.
+chrome.alarms.clear("gamblium-update").catch(() => {}); // the 6-hour check of #212, gone
+async function updateOnStart() {
+  if (IS_AGENT_BUILD) return;
+  const { autoUpdate } = await chrome.storage.local.get({ autoUpdate: true });
+  if (autoUpdate !== false) updateCheck(true);
+}
+chrome.runtime.onStartup.addListener(() => { updateOnStart(); });
+
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   const ours = _sender.origin ? _sender.origin === OUR_ORIGIN : String(_sender.url || "").startsWith(OUR_ORIGIN + "/");
   if (!ours && !FROM_A_PAGE.has(msg?.type)) {
@@ -1927,6 +2032,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   }
   const run =
     msg.type === "status" ? status()
+    : msg.type === "group-limit-set" ? chrome.storage.local.get({ groupLimits: {} }).then(({ groupLimits }) => {
+        const title = String(msg.title || "").slice(0, 80);
+        if (!title) return { ok: false, error: "a group needs a name to have a limit" };
+        const lim = { ...(msg.memoryMb > 0 ? { memoryMb: Math.round(msg.memoryMb) } : {}), ...(msg.cpuPct > 0 ? { cpuPct: Number(msg.cpuPct) } : {}) };
+        if (Object.keys(lim).length) groupLimits[title] = lim; else delete groupLimits[title];
+        return chrome.storage.local.set({ groupLimits }).then(() => ({ ok: true, groupLimits }));
+      })
+    : msg.type === "update-state" ? native({ type: "update-status" })
+    : msg.type === "update-check" ? updateCheck(true)
+    : msg.type === "update-restart" ? updateRestart()
+    : msg.type === "closed-groups" ? chrome.storage.local.get({ closedGroups: [] }).then((r) => ({ ok: true, groups: r.closedGroups }))
+    : msg.type === "group-reopen" ? reopenGroup(String(msg.id || ""), _sender.tab?.windowId)
     : msg.type === "sleep-now" ? sleepNow(msg.scope, msg.windowId).then((slept) => ({ slept }))
     : msg.type === "downloads-list" ? downloadsList(msg.limit)
     : msg.type === "downloads-action" ? downloadsAction(msg.id, msg.action)
@@ -2080,3 +2197,21 @@ chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
   if (!change.url || tab.incognito || !isBrowserDownloadsPage(change.url)) return;
   chrome.tabs.update(tabId, { url: chrome.runtime.getURL("ui/downloads.html") }).catch(() => {});
 });
+
+// ---- Tab groups: fold the others (owner, Nov 14 2026: the tab strip runs out of room) ----
+// Opening a tab that sits in a group folds every other group of that window down to its name.
+// A tab outside any group changes nothing. The browser refuses edits while a tab is being dragged,
+// so a refused fold is tried once more a moment later.
+async function foldOtherGroups(tabId) {
+  const { foldGroups } = await chrome.storage.local.get({ foldGroups: true });
+  if (!foldGroups) return;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab || tab.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE) return;
+  const groups = await chrome.tabGroups.query({ windowId: tab.windowId });
+  for (const g of groups) {
+    if (g.id === tab.groupId || g.collapsed) continue;
+    await chrome.tabGroups.update(g.id, { collapsed: true }).catch(() =>
+      new Promise((r) => setTimeout(r, 400)).then(() => chrome.tabGroups.update(g.id, { collapsed: true })).catch(() => {}));
+  }
+}
+chrome.tabs.onActivated.addListener(({ tabId }) => { foldOtherGroups(tabId); });

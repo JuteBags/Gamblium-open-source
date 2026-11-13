@@ -277,6 +277,8 @@ fn ask(bridge: &BridgeInfo, cmd: Value) -> Option<Value> {
 /// Starts the session's browser and waits until it takes commands.
 fn start(dir: &Path, hidden: bool) -> Result<BridgeInfo, String> {
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    // A closed session is packed small (pack.rs): unpacked before its browser starts.
+    crate::pack::unpack(dir).map_err(|e| format!("could not unpack the session: {e}"))?;
     let me = std::env::current_exe().map_err(|e| e.to_string())?;
     // Or the browser inherits the terminal's pipe and whoever called us waits for it.
     crate::launch::keep_our_output_to_ourselves();
@@ -424,6 +426,27 @@ fn stop(dir: &Path) -> bool {
     true
 }
 
+/// Packs a stopped session (pack.rs): its caches go, the rest becomes one archive. The extension
+/// list is noted first, since the archive cannot be read for it. The browser lets go of its files
+/// a moment after it ends, so a few tries. -> { before, after } in MB, or the reason it did not.
+fn pack_closed(dir: &Path) -> Value {
+    if pid_of(dir).is_some() {
+        return json!({ "error": "the session is running" });
+    }
+    let mut n = note(dir);
+    n["extensions"] = json!(installed_extensions(dir));
+    write_note(dir, &n);
+    let mut last = String::new();
+    for _ in 0..12 {
+        match crate::pack::pack(dir) {
+            Ok((before, after)) => return json!({ "beforeMb": (before as f64 / 1048576.0 * 10.0).round() / 10.0, "afterMb": (after as f64 / 1048576.0 * 10.0).round() / 10.0 }),
+            Err(e) => last = e.to_string(),
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    json!({ "error": last })
+}
+
 fn names() -> Vec<String> {
     let mut out: Vec<String> = root()
         .and_then(|r| fs::read_dir(r).ok())
@@ -445,7 +468,8 @@ fn row(name: &str, dir: &Path) -> Value {
     let n = note(dir);
     json!({
         "name": name, "state": state_of(dir), "folder": dir, "by": n["by"].as_str().unwrap_or("cli"),
-        "applies": { "proxy": n["proxy"], "extensions": installed_extensions(dir), "always": true },
+        "applies": { "proxy": n["proxy"], "extensions": if crate::pack::is_packed(dir) { n["extensions"].clone() } else { json!(installed_extensions(dir)) }, "always": true },
+        "packed": crate::pack::is_packed(dir), "sizeMb": (crate::pack::size_of(dir) as f64 / 1048576.0 * 10.0).round() / 10.0,
         // Hidden: pictures and web fonts off unless asked for. One tab at work:
         // opening the next page puts the one before to sleep.
         "images": n["images"] == true, "keepTabs": n["keepTabs"] == true,
@@ -555,7 +579,19 @@ pub fn command(args: &[String]) -> Result<Value, String> {
             let name = name_at(1)?;
             let dir = existing(name)?;
             let was_running = stop(&dir);
-            Ok(json!({ "ok": true, "session": row(name, &dir), "wasRunning": was_running }))
+            let packed = pack_closed(&dir);
+            Ok(json!({ "ok": true, "session": row(name, &dir), "wasRunning": was_running, "packed": packed }))
+        }
+        // Packs every stopped session that is not packed yet.
+        "pack" => {
+            let mut done = Vec::new();
+            for name in names() {
+                let dir = dir_of(&name)?;
+                if pid_of(&dir).is_none() && !crate::pack::is_packed(&dir) {
+                    done.push(json!({ "name": name, "packed": pack_closed(&dir) }));
+                }
+            }
+            Ok(json!({ "ok": true, "sessions": done }))
         }
         "delete" => {
             let name = name_at(1)?;

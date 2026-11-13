@@ -61,6 +61,10 @@ WORDING = {
     b"Private Window with Tor connectivity": b"Private window with Tor",
     b"Browsing History": b"Browsing history",  # Appearance > autocomplete suggestions
     b"Recent download history": b"Recent downloads",  # the download bubble's title
+    # The empty bookmarks bar's standing hint and link (owner, Nov 14 2026: "what is this, and no way
+    # to close it"). Empty: the bar shows only the tab-groups button and any bookmarks.
+    "For quick access, place your bookmarks here on the bookmarks bar.".encode(): b"",
+    "Import bookmarks now…".encode(): b"",
     # The private New Tab's note: 50 words in a card (owner's Rule 11, Nov 13 2026: help is one short line).
     b"Brave never remembers what you do in a Private Window. Sites you visit won't show up in your history. "
     b"Cookies, form data, and site data vanish once you close all open private windows. Note that your activity "
@@ -381,7 +385,7 @@ def run(folder, branding, name="Gamblium", locales=("en-US", "en-GB"), check=Fal
                         n += 1
                         report.setdefault("address bar", []).append(f"{rel}:{rid}")
                         continue
-                    worded = WORDING.get(raw) or next((new for old, new in SHORT_NOTES if raw.startswith(old)), None)
+                    worded = WORDING[raw] if raw in WORDING else next((new for old, new in SHORT_NOTES if raw.startswith(old)), None)
                     if worded is not None:
                         pk["res"][rid] = worded
                         n += 1

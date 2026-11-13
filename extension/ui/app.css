@@ -1145,3 +1145,18 @@ details.panel.testers section.panel { padding: 14px 0 0; background: none; backg
 details.testers .grid { gap: 24px; }
 /* Sessions, Open now: a window of one or two tabs names its sites. */
 .wins .whosts { margin-left: 10px; color: var(--text-muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Popup Menu: a downloaded update heads the menu, in the good tint. */
+.popup .mrow.update { color: var(--ok-ink); }
+.popup .mrow.update svg { color: var(--ok-ink); }
+.popup .mrow.update:hover, .popup .mrow.update:focus-visible, .popup .mrow.update.sure { background: var(--ok-bg); }
+.popup .mrow.update.sure span { font-weight: 600; }
+/* Tabs and memory: a group's limit, edited in its own row under the group. */
+.limitedit td { padding: 10px 12px 14px; }
+.limitform { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.limitform label { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); }
+.limitform input[type="number"] { width: 90px; }
+/* Settings, This profile: the updates line. Real buttons (owner: buttons that look like buttons); Restart in the good tint. */
+.updrow { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.updrow button { height: 30px; padding: 0 14px; border-radius: 999px; font-size: 13px; }
+.updrow button.good { border-color: transparent; color: var(--ok-ink); background: var(--ok-bg); font-weight: 600; }
+.updrow button.good:hover { background: color-mix(in srgb, var(--ok-ink) 22%, var(--ok-bg)); }

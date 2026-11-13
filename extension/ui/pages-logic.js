@@ -1061,3 +1061,6 @@ export function zoomStep(now, dir) {
 
 /** A zoom factor as the browser writes it: 1 -> "100%", 0.67 -> "67%". */
 export const zoomLabel = (z) => `${Math.round((Number(z) || 1) * 100)}%`;
+
+/** "1.0.0-beta.2" as people read it: "1.0.0 beta 2" (the helper's versions carry the semver suffix). */
+export const versionLabel = (v) => String(v || '').replace(/-beta\.?(\d*)$/, (_, n) => ` beta${n ? ' ' + n : ''}`);

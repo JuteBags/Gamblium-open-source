@@ -10,6 +10,7 @@
       "seed": "#8A8F9A",
       "variant": 2,
       "tint": "#0D0E10",
+      "frame_tint": "steel-deep",
       "color": {
         "void": "#030304",
         "coal": "#0D0E10",

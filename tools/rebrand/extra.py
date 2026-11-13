@@ -1093,7 +1093,8 @@ def gamblium_version(branding):
     """Gamblium's version: the extension's manifest beside branding/ (in the repository and in the
     installed app folder alike). None when it is not there."""
     try:
-        return json.loads((Path(branding).parent / "extension" / "manifest.json").read_text(encoding="utf8"))["version"]
+        m = json.loads((Path(branding).parent / "extension" / "manifest.json").read_text(encoding="utf8"))
+        return m.get("version_name") or m["version"]
     except Exception:
         return None
 

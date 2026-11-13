@@ -181,6 +181,26 @@ pub fn handle(req: &Value, browser_pid: Option<u32>) -> Result<Value, String> {
         // Opens a web address in a Tor window of this same browser. Extensions cannot open Tor
         // windows (their worker does not even see them); the browser's own --tor switch does,
         // handed to the running browser of this profile.
+        // Updates (update.rs). "update-check" starts a check-and-download in its own process (the
+        // extension asks once per browser start, with force) and answers with where things stand.
+        "update-status" => Ok(json!({ "current": env!("CARGO_PKG_VERSION"), "update": crate::update::state(), "ready": crate::update::ready_installer(env!("CARGO_PKG_VERSION")).is_some() })),
+        "update-check" => {
+            let st = crate::update::state();
+            let age = st["at"].as_u64().map(|t| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0).saturating_sub(t)).unwrap_or(u64::MAX);
+            let force = req.get("force").and_then(Value::as_bool).unwrap_or(false);
+            if force || age > 6 * 3600 || st["state"] == "error" && age > 600 {
+                let me = std::env::current_exe().map_err(|e| e.to_string())?;
+                crate::launch::spawn_detached(&me, &["update".into(), "--download".into()]).map_err(|e| e.to_string())?;
+            }
+            Ok(json!({ "current": env!("CARGO_PKG_VERSION"), "update": st, "ready": crate::update::ready_installer(env!("CARGO_PKG_VERSION")).is_some() }))
+        }
+        // "Restart to update": the updater's copy waits for this browser to close, installs and
+        // starts Gamblium again. The extension then closes the windows.
+        "update-restart" => {
+            let installer = crate::update::ready_installer(env!("CARGO_PKG_VERSION")).ok_or("no update is ready")?;
+            crate::update::start_apply(&installer, true)?;
+            Ok(json!({ "applying": true }))
+        }
         "open-tor" => {
             // No address: an empty Tor window (the menu's "New Tor window").
             let url = req.get("url").and_then(Value::as_str).unwrap_or("");

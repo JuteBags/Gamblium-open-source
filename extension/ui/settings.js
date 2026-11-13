@@ -3,7 +3,7 @@
 import { $, send, helper, el, say } from './page.js';
 import { DEFAULTS, describeTemp } from '../rules.js';
 import { OWN_DEFAULTS } from '../download-rules.js';
-import { clampInt, parseHosts, proxyLocked, bridgeLine, COLOUR_SETS, setColours, findMatches, splitTheme, permitStatus, permitShort, permitParts } from './pages-logic.js';
+import { clampInt, parseHosts, proxyLocked, bridgeLine, COLOUR_SETS, setColours, findMatches, splitTheme, permitStatus, permitShort, permitParts, versionLabel } from './pages-logic.js';
 import { proxyLine } from './security-logic.js';
 
 const store = async (values) => {
@@ -266,10 +266,13 @@ async function loadProfile() {
   // The user-agent string says "157.0.0.0" on purpose (reduced); the brand list has the real major version.
   const chromium = (navigator.userAgentData?.brands ?? []).find((x) => x.brand === 'Chromium')?.version;
   const brave = ping.ok === false ? '' : ping.braveVersion || '';
-  const rows = [['Gamblium', `${m.version} on Brave${brave ? ' ' + brave : ''}${chromium ? ` (Chromium ${chromium})` : ''}`]];
+  // "1.0.0 beta" (version_name) where there is one; the helper says "1.0.0-beta.1" for the same build.
+  const shown = m.version_name || m.version;
+  const sameBuild = (h) => String(h || '').replace(/-beta(\.\d+)?$/, ' beta') === shown || h === m.version;
+  const rows = [['Gamblium', `${shown} on Brave${brave ? ' ' + brave : ''}${chromium ? ` (Chromium ${chromium})` : ''}`]];
   if (ping.ok === false) rows.push(['Helper', 'not reachable; run "gamblium install-host"']);
   else {
-    if (ping.version !== m.version) rows.push(['Helper', ping.version]); // only worth a line when it differs
+    if (!sameBuild(ping.version)) rows.push(['Helper', ping.version]); // only worth a line when it differs
     const folder = ping.userDataDir || '';
     const copy = el('button', { type: 'button', className: 'quiet copybtn', textContent: 'Copy path' });
     copy.addEventListener('click', async () => {
@@ -285,14 +288,73 @@ async function loadProfile() {
     });
     rows.push(['Profile folder', folder ? [el('span', { className: 'mono path', textContent: folder }), open, copy] : "Brave's default folder"]);
   }
+  if (ping.ok !== false) rows.splice(1, 0, ['Updates', updatesCell()]);
   $('about').replaceChildren(...rows.flatMap(([k, v]) => [el('dt', { textContent: k }), el('dd', {}, v)]));
+  showUpdate(await send({ type: 'update-state' }).catch(() => null));
 }
+
+// ---- Updates: where things stand, Check for updates, and Restart when one is ready ----
+function updatesCell() {
+  const check = el('button', { type: 'button', id: 'updCheck', textContent: 'Check for updates' });
+  check.addEventListener('click', checkUpdates);
+  const restart = el('button', { type: 'button', className: 'good', id: 'updRestart', textContent: 'Restart to update', hidden: true });
+  restart.addEventListener('click', async () => {
+    if (restart.dataset.sure !== '1') {
+      restart.dataset.sure = '1';
+      restart.textContent = 'Close every window and update?';
+      return;
+    }
+    const r = await send({ type: 'update-restart' });
+    if (!r || r.ok === false) $('updState').textContent = r?.error || 'The update could not start.';
+  });
+  return el('span', { className: 'updrow' }, [el('span', { id: 'updState', textContent: '…' }), check, restart]);
+}
+const BUSY = new Set(['checking', 'downloading', 'busy', 'installing']);
+function updateLine(u) {
+  if (!u || u.ok === false) return 'The helper does not answer.';
+  const st = u.update || {};
+  if (u.ready) return `${versionLabel(st.version)} is ready`;
+  return st.state === 'checking' || st.state === 'busy' ? 'Checking…'
+    : st.state === 'downloading' ? `Downloading ${versionLabel(st.version)}…`
+    : st.state === 'installing' ? 'Installing…'
+    : st.state === 'up-to-date' ? 'Up to date'
+    : st.state === 'error' ? `Could not check: ${st.error || 'unknown error'}`
+    : 'Not checked yet';
+}
+function showUpdate(u) {
+  if (!$('updState')) return;
+  $('updState').textContent = updateLine(u);
+  $('updRestart').hidden = !u?.ready;
+  $('updCheck').hidden = !!u?.ready;
+}
+// The check runs in its own process: ask where it stands every 2 s, for a minute at most.
+async function checkUpdates() {
+  $('updCheck').disabled = true;
+  $('updState').textContent = 'Checking…';
+  const since = Math.floor(Date.now() / 1000) - 1;
+  await send({ type: 'update-check' }).catch(() => null);
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const u = await send({ type: 'update-state' }).catch(() => null);
+    const st = u?.update || {};
+    const fresh = (st.at || 0) >= since;
+    if (fresh || u?.ready) showUpdate(u);
+    if (u?.ready || (fresh && !BUSY.has(st.state))) break;
+  }
+  $('updCheck').disabled = false;
+}
+chrome.storage.local.get({ autoUpdate: true }).then(({ autoUpdate }) => ($('autoUpdate').checked = autoUpdate));
+$('autoUpdate').addEventListener('change', () => store({ autoUpdate: $('autoUpdate').checked }));
 
 $('profileLabel').addEventListener('change', () => store({ profileLabel: $('profileLabel').value.trim().slice(0, 40) }));
 
 loadSleep();
 loadBrand();
 loadFreeze();
+
+// ---- Tab groups: fold the others (the background does the folding) ----
+chrome.storage.local.get({ foldGroups: true }).then(({ foldGroups }) => ($('foldGroups').checked = foldGroups));
+$('foldGroups').addEventListener('change', () => store({ foldGroups: $('foldGroups').checked }));
 loadLook();
 send({ type: 'proxy-get' }).then(showProxy);
 showBridge();
