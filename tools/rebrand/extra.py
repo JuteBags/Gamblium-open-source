@@ -699,6 +699,41 @@ def hide_menu_button(data):
     return bytes(out), [f"menu button: hidden (handler at {start:#x})"]
 
 
+# ---- 2d. The extensions button (puzzle) first, so Gamblium's button is the rightmost (owner, Nov 14 2026) ---
+# Everything of Brave's toolbar stays (the puzzle lists every extension), but Gamblium's button
+# must be at the right end. The extensions area places its pinned buttons first and the puzzle
+# last (ExtensionsToolbarDesktop::ReorderAllChildViews: ReorderChildView(puzzle, count - 1 or -2)).
+# The index for the puzzle becomes 0 (`movsxd r8, edi` -> `xor r8, r8`, 3 bytes), so the puzzle
+# leads and the pinned buttons follow; the launcher pins Gamblium's button last.
+# Found by content (checked with Brave's symbols on 1.99.57): the block that counts the children,
+# moves the request-access button to the end if there is one, then the puzzle.
+
+_PUZZLE_ORDER = re.compile(
+    re.escape(bytes.fromhex("8b9e")) + b".." + re.escape(bytes(2)) + re.escape(bytes.fromhex("8d7bff488b96")) + b".." + re.escape(bytes(2))
+    + re.escape(bytes.fromhex("4885d2741083c3fe4c63c74889f1e8")) + b"...." + re.escape(bytes.fromhex("89df4c63c7488b96")) + b".." + re.escape(bytes(2))
+    + re.escape(bytes.fromhex("4889f1e8")),
+    re.S,
+)
+_PUZZLE_FIRST = re.compile(
+    re.escape(bytes.fromhex("8b9e")) + b".." + re.escape(bytes(2)) + re.escape(bytes.fromhex("8d7bff488b96")) + b".." + re.escape(bytes(2))
+    + re.escape(bytes.fromhex("4885d2741083c3fe4c63c74889f1e8")) + b"...." + re.escape(bytes.fromhex("89df4d31c0488b96")),
+    re.S,
+)
+
+
+def puzzle_first(data):
+    """-> (new bytes, [notes]). The puzzle is put first in the extensions area, not last."""
+    found = [m.start() for m in _PUZZLE_ORDER.finditer(data)]
+    if len(found) != 1:
+        if not found and _PUZZLE_FIRST.search(data):
+            return data, ["extensions button: already first"]
+        return data, [f"extensions button: order not changed ({len(found)} places found; a different Brave); left alone"]
+    at = found[0] + 0x25
+    out = bytearray(data)
+    out[at:at + 3] = bytes.fromhex("4d31c0")
+    return bytes(out), [f"extensions button: first in the extensions area (at {at:#x})"]
+
+
 def patch_dll(data, art_svg, plain_svg=None):
     """-> (new bytes, [what was done per lion]). plain_svg: the mark to use where the icon has one
     colour only (its facets should be drawn apart, or it becomes a plain kite)."""
@@ -1190,6 +1225,8 @@ def run(folder, branding, check=False, log=print, name="Gamblium", guard="Gambli
         new, menu_notes = patch_menu_button(new)
         report["vector"] = notes
         new, hide_notes = hide_menu_button(new)
+        new, puzzle_notes = puzzle_first(new)
+        hide_notes += puzzle_notes
         report["menu button"] = menu_notes + hide_notes
         for line in hide_notes:
             log(line)

@@ -53,11 +53,21 @@ export function partsForScroller(from, to, view, maxScroll) {
   return steps;
 }
 
+// A page that does not draw (its window covered or off screen, a heavy page still decoding)
+// can keep a picture command waiting for minutes: seen on a 24,000 px Wikipedia article in a
+// background test window, 105 s for the first part. Each command gets a limit instead, and the
+// debugger is let go either way, so the next try is not refused as "already attached".
+export const COMMAND_LIMIT_MS = 20000;
 async function withDebugger(tabId, work) {
   const target = { tabId };
   await chrome.debugger.attach(target, "1.3");
+  const limited = (method, params = {}) => {
+    let timer;
+    const late = new Promise((_, no) => { timer = setTimeout(() => no(new Error("the page did not draw in time: show its window and try again")), COMMAND_LIMIT_MS); });
+    return Promise.race([chrome.debugger.sendCommand(target, method, params), late]).finally(() => clearTimeout(timer));
+  };
   try {
-    return await work((method, params = {}) => chrome.debugger.sendCommand(target, method, params));
+    return await work(limited);
   } finally {
     await chrome.debugger.detach(target).catch(() => {});
   }
@@ -100,6 +110,7 @@ async function facts(tabId) {
 /** A region of the page (CSS px, page coordinates) as one PNG data URL. */
 async function captureRegion(tabId, rect, scale) {
   const { parts, truncated } = planParts(rect, scale);
+  const t0 = performance.now();
   const shots = await withDebugger(tabId, async (send) => {
     const out = [];
     for (const p of parts) {
@@ -108,13 +119,17 @@ async function captureRegion(tabId, rect, scale) {
     }
     return out;
   });
-  if (shots.length === 1 && !truncated) return { dataUrl: "data:image/png;base64," + shots[0].data, width: Math.round(rect.width * scale), height: Math.round(rect.height * scale), truncated };
+  const t1 = performance.now();
+  if (shots.length === 1 && !truncated) return { dataUrl: "data:image/png;base64," + shots[0].data, width: Math.round(rect.width * scale), height: Math.round(rect.height * scale), truncated, timing: { captureMs: Math.round(t1 - t0), joinMs: 0 } };
   const width = Math.round(rect.width * scale);
   const height = Math.round(parts.reduce((h, p) => h + p.height, 0) * scale);
   const canvas = new OffscreenCanvas(width, height);
   const g = canvas.getContext("2d");
   for (const s of shots) g.drawImage(await bitmapOf(s.data), 0, Math.round(s.at * scale));
-  return { dataUrl: await dataUrlOf(canvas), width, height, truncated };
+  const dataUrl = await dataUrlOf(canvas);
+  // How long the browser took to draw the parts, and how long joining and encoding took here:
+  // the second is what a native joiner (the Rust helper) could save.
+  return { dataUrl, width, height, truncated, timing: { captureMs: Math.round(t1 - t0), joinMs: Math.round(performance.now() - t1) } };
 }
 
 // In the page: the inner box's geometry and scroll range.

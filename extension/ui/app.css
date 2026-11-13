@@ -1116,6 +1116,8 @@ details.how[open] summary { margin-bottom: 6px; }
 
 /* Downloads, quiet (owner, Nov 13 2026): only the files on the page; folder sorting and the downloader behind one icon. */
 .titlerow { display: flex; align-items: center; gap: 10px; }
+/* The page's settings gear sits at the right end of the title row, over the panel's right edge (owner, Nov 14 2026). */
+.titlerow .iconlink { margin-left: auto; }
 .iconlink { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 999px; color: var(--text-muted); transition: color var(--quick), background-color var(--quick); }
 .iconlink:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
 .iconlink:focus-visible { outline: 2px solid var(--highlight); outline-offset: 2px; }

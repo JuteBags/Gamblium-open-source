@@ -175,6 +175,16 @@ class Extra(unittest.TestCase):
         self.assertEqual(view, (0.0, 0.0, 256.0, 256.0))
         self.assertIsNone(X.mark_polygons(STROKED))
 
+    def test_the_puzzle_goes_first_in_the_extensions_area(self):
+        block = bytes.fromhex("8b9ea80100008d7bff488b96b00600004885d2741083c3fe4c63c74889f1e8b12fc9fe89df4c63c7488b96400300004889f1e89d2fc9fe")
+        data = bytes(8) + block + bytes(8)
+        new, notes = X.puzzle_first(data)
+        self.assertIn("first", notes[0])
+        self.assertEqual(new[8 + 0x25:8 + 0x28], bytes.fromhex("4d31c0"))  # xor r8, r8: index 0
+        self.assertEqual(sum(a != b for a, b in zip(new, data)), 3)
+        self.assertEqual(X.puzzle_first(new), (new, ["extensions button: already first"]))
+        self.assertIn("left alone", X.puzzle_first(bytes(64))[1][0])
+
     def test_brave_menu_button_is_hidden_only_when_both_places_are_certain(self):
         # A tiny program: the button's theme handler, its callee reading two neighbouring fields
         # twice, a decoy handler whose callee does not, and View::SetVisible.

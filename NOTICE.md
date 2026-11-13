@@ -13,6 +13,7 @@ own signed release, version in `tools/brave-version.txt`, with these changes mad
   place, with nothing in the file moved:
   - the lion drawings replaced by Gamblium's mark;
   - the menu button's drawing, and the button itself hidden;
+  - the extensions (puzzle) button placed first in the extensions area, so Gamblium's button is the rightmost;
   - the question shown when an extension supplies the new tab page, switched off;
   - Brave's purple and lavender colours replaced by Gamblium's;
 - **`brave.exe`**: its icon and the words "Brave Browser" replaced in place.

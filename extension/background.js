@@ -523,6 +523,12 @@ async function awakeGet(tabId) {
 }
 
 // { tabId, tab: true|false } and/or { tabId, site: true|false }
+/** Every tab of the group is on the keep-awake list. */
+async function groupAwake(groupId) {
+  const awake = new Set(await awakeTabs());
+  const ids = (await chrome.tabs.query({ groupId }).catch(() => [])).map((t) => t.id);
+  return ids.length > 0 && ids.every((id) => awake.has(id));
+}
 async function awakeSet(msg) {
   const tab = await chrome.tabs.get(msg.tabId).catch(() => null);
   if (!tab) return { ok: false, error: "that tab is gone" };
@@ -1763,6 +1769,7 @@ async function menuOpen(sender, msg) {
   return {
     ok: true, focused, pinned: !!tab.pinned, muted: !!tab.mutedInfo?.muted, awakeTab: !!a.tab, awakeSite: !!a.site, host: a.host || "",
     bookmarked: marks.length > 0, tools: MENU.map((m) => ({ id: m.id, title: m.title })), sessions, spaces, inSpace: tab.groupId !== -1,
+    groupAwake: tab.groupId !== -1 && await groupAwake(tab.groupId),
     pentest: pentestProfile === true,
   };
 }
@@ -1867,6 +1874,23 @@ async function menuDo(msg, sender) {
     case "space-leave": return IS_AGENT_BUILD ? { ok: false } : chrome.tabs.ungroup(tab.id).then(() => ({ ok: true }));
     case "tab-duplicate": await chrome.tabs.duplicate(tab.id); return { ok: true };
     case "sleep-others": return { ok: true, slept: await sleepNow("all", tab.windowId) }; // every hidden tab; the one showing stays
+    // A whole tab group: asleep at once (the tabs on screen stay), or kept awake as one.
+    case "group-sleep": {
+      if (tab.groupId === -1) return { ok: false, error: "this tab is in no group" };
+      let slept = 0;
+      for (const t of await allTabs()) {
+        if (t.groupId !== tab.groupId || t.active || t.discarded || t.audible) continue;
+        if (await chrome.tabs.discard(t.id).catch(() => null)) slept++;
+      }
+      return { ok: true, slept };
+    }
+    case "group-awake": {
+      if (tab.groupId === -1) return { ok: false, error: "this tab is in no group" };
+      const ids = (await chrome.tabs.query({ groupId: tab.groupId })).map((t) => t.id);
+      const list = (await awakeTabs()).filter((id) => !ids.includes(id));
+      await chrome.storage.session.set({ awakeTabs: msg.on === false ? list : [...list, ...ids] });
+      return { ok: true, tabs: ids.length };
+    }
     case "tab-pin": await chrome.tabs.update(tab.id, { pinned: !tab.pinned }); return { ok: true };
     case "tab-mute": await chrome.tabs.update(tab.id, { muted: !tab.mutedInfo?.muted }); return { ok: true };
     case "awake": return awakeSet({ tabId: tab.id, ...(typeof msg.tab === "boolean" ? { tab: msg.tab } : {}), ...(typeof msg.site === "boolean" ? { site: msg.site } : {}) });

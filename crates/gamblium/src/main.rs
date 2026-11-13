@@ -1151,6 +1151,12 @@ fn run_launch(mut a: LaunchArgs) -> Result<(), String> {
                 println!("profile prefs {tag} ({profile}): {k} = {}", preset.preferences[k]);
             }
         }
+        if ours {
+            let profile = profile_directory.as_deref().unwrap_or("Default");
+            if launch::ensure_pinned(&prefs_dir, profile, host::EXTENSION_ID, dry_run).map_err(|e| format!("Preferences: {e}"))? {
+                println!("profile prefs {tag} ({profile}): Gamblium's button pinned at the right end of the toolbar");
+            }
+        }
     }
     // The preference is a registry entry named after the program's path. A
     // browser run from an unpacked package may be deleted tomorrow, so

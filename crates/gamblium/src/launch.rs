@@ -171,6 +171,30 @@ fn apply_prefs_file(path: &Path, prefs: &Map<String, Value>, dry_run: bool) -> i
     Ok(changed)
 }
 
+/// Gamblium's toolbar button is its menu (Brave's own menu button is hidden in the copy), so it
+/// must stay on the toolbar, at its right end: on every start of one of our profiles, with the
+/// browser closed, our extension is put last in `extensions.pinned_extensions` (the copy's
+/// extensions area puts the puzzle first and the pinned buttons after it). Other pins stay.
+/// Only new folders got the pin before; an older profile, or one unpinned by accident, had the
+/// menu four clicks deep (owner, Nov 14 2026). The pref is not protected on Brave 1.99.57.
+pub fn ensure_pinned(user_data_dir: &Path, profile_directory: &str, extension_id: &str, dry_run: bool) -> io::Result<bool> {
+    let path = user_data_dir.join(profile_directory).join("Preferences");
+    let root: Value = match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or(Value::Null),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Value::Null,
+        Err(e) => return Err(e),
+    };
+    let mut pins: Vec<Value> = root.pointer("/extensions/pinned_extensions").and_then(Value::as_array).cloned().unwrap_or_default();
+    if pins.last().is_some_and(|v| v == extension_id) {
+        return Ok(false);
+    }
+    pins.retain(|v| v != extension_id);
+    pins.push(json!(extension_id));
+    let mut one = Map::new();
+    one.insert("extensions.pinned_extensions".into(), Value::Array(pins));
+    Ok(!apply_prefs_file(&path, &one, dry_run)?.is_empty())
+}
+
 /// How this profile was last started, for the helper to pass on to the
 /// extension: its pages cannot read browser prefs, so this is how they learn
 /// which theme the browser is wearing.
@@ -772,5 +796,19 @@ mod tests {
         let extra = vec!["--disable-features=X,DisableLoadExtensionCommandLineSwitch".to_string()];
         let args = build_args(None, None, None, &preset, &extra);
         assert_eq!(args[1], "--disable-features=X,DisableLoadExtensionCommandLineSwitch");
+    }
+
+    #[test]
+    fn our_button_is_pinned_last_and_other_pins_stay() {
+        let dir = std::env::temp_dir().join(format!("gpin-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("Default")).unwrap();
+        fs::write(dir.join("Default").join("Preferences"), r#"{"extensions":{"pinned_extensions":["ours","other"]},"keep":1}"#).unwrap();
+        assert!(ensure_pinned(&dir, "Default", "ours", false).unwrap());
+        let v: Value = serde_json::from_str(&fs::read_to_string(dir.join("Default").join("Preferences")).unwrap()).unwrap();
+        assert_eq!(v["extensions"]["pinned_extensions"], json!(["other", "ours"]));
+        assert_eq!(v["keep"], json!(1));
+        assert!(!ensure_pinned(&dir, "Default", "ours", false).unwrap()); // already there: nothing written
+        let _ = fs::remove_dir_all(&dir);
     }
 }

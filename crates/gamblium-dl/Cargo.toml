@@ -1,6 +1,6 @@
 [package]
 name = "gamblium-dl"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2021"
 description = "Gamblium's own downloader: split HTTP downloads with an adaptive number of connections, several sources, resume"
 license = "GPL-3.0-only"

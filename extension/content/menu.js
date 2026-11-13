@@ -114,6 +114,8 @@
       // Sleep and waking, together: the whole site awake, the rest asleep.
       ...(st.host ? [{ id: 'awake-site', label: `Always keep ${short(st.host, 24)} awake`, check: !!st.awakeSite }] : []),
       { id: 'sleep-others', label: 'Put the other tabs to sleep', icon: 'moon' },
+      // A tab in a group (a space): the whole group at once (owner's tab-group list, Nov 14 2026).
+      ...(st.inSpace ? [{ id: 'group-sleep', label: 'Put this group to sleep', icon: 'moon' }, { id: 'group-awake', label: 'Keep this group awake', check: !!st.groupAwake }] : []),
       // Starting a space is rare: one line here, not an entry of its own in every menu.
       ...(st.spaces && !st.spaces.length ? [{ sep: true }, { id: 'space-new', label: 'Start a space with this tab', icon: 'layers' }] : []),
     ] });
@@ -534,6 +536,8 @@
       case 'shot': return OURS ? loadShot() : send('screenshot-start');
       case 'tab-duplicate': case 'tab-pin': case 'tab-mute': case 'sleep-others': case 'focus': case 'open-dashboard': case 'open-settings': return send(id);
       case 'awake-tab': return send('awake', { tab: !item.check });
+      case 'group-sleep': return send('group-sleep');
+      case 'group-awake': return send('group-awake', { on: !item.check });
       case 'awake-site': return send('awake', { site: !item.check });
       default:
         if (id.startsWith('page:')) return c.runs?.[Number(id.slice(5))]?.();
