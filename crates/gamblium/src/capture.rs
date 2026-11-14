@@ -190,9 +190,93 @@ pub fn capture(_pid: u32, _want: Option<Want>) -> Result<(String, u32, u32, usiz
     Err("window pictures need Windows".into())
 }
 
+/// Joins PNG slices of one page, top to bottom, into one PNG written to `out`. A picture of a long
+/// page comes in slices: the browser draws at most 16000 px in one go and a canvas holds at most
+/// 32767. Rows are streamed: only one slice is in memory at a time. Slices narrower than the
+/// first are padded with white; wider ones are cut. -> (width, height).
+pub fn join_pngs(parts: &[Vec<u8>], out: impl std::io::Write) -> Result<(u32, u32), String> {
+    fn rgba(png_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+        let mut dec = png::Decoder::new(std::io::Cursor::new(png_bytes));
+        dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+        let mut rd = dec.read_info().map_err(|e| e.to_string())?;
+        let mut buf = vec![0; rd.output_buffer_size()];
+        let info = rd.next_frame(&mut buf).map_err(|e| e.to_string())?;
+        let (w, h) = (info.width, info.height);
+        let px: Vec<u8> = match info.color_type {
+            png::ColorType::Rgba => buf[..info.buffer_size()].to_vec(),
+            png::ColorType::Rgb => buf[..info.buffer_size()].chunks(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+            png::ColorType::GrayscaleAlpha => buf[..info.buffer_size()].chunks(2).flat_map(|p| [p[0], p[0], p[0], p[1]]).collect(),
+            png::ColorType::Grayscale => buf[..info.buffer_size()].iter().flat_map(|&g| [g, g, g, 255]).collect(),
+            other => return Err(format!("unexpected colours in a slice: {other:?}")),
+        };
+        Ok((w, h, px))
+    }
+    if parts.is_empty() {
+        return Err("no slices".into());
+    }
+    // Sizes first (headers only), so the joined header can be written before any rows.
+    let mut sizes = Vec::new();
+    for p in parts {
+        let rd = png::Decoder::new(std::io::Cursor::new(p.as_slice())).read_info().map_err(|e| e.to_string())?;
+        sizes.push((rd.info().width, rd.info().height));
+    }
+    let width = sizes[0].0;
+    let height: u32 = sizes.iter().map(|s| s.1).sum();
+    let mut enc = png::Encoder::new(out, width, height);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.set_compression(png::Compression::Fast);
+    let mut wr = enc.write_header().map_err(|e| e.to_string())?;
+    let mut stream = wr.stream_writer().map_err(|e| e.to_string())?;
+    use std::io::Write;
+    let row_len = width as usize * 4;
+    for p in parts {
+        let (w, h, px) = rgba(p)?;
+        let src_len = w as usize * 4;
+        for y in 0..h as usize {
+            let row = &px[y * src_len..(y + 1) * src_len];
+            if src_len >= row_len {
+                stream.write_all(&row[..row_len]).map_err(|e| e.to_string())?;
+            } else {
+                stream.write_all(row).map_err(|e| e.to_string())?;
+                stream.write_all(&vec![255; row_len - src_len]).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    stream.finish().map_err(|e| e.to_string())?;
+    Ok((width, height))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn png_of(w: u32, h: u32, colour: [u8; 3]) -> Vec<u8> {
+        let mut v = Vec::new();
+        let mut enc = png::Encoder::new(&mut v, w, h);
+        enc.set_color(png::ColorType::Rgb);
+        enc.set_depth(png::BitDepth::Eight);
+        let data: Vec<u8> = (0..w * h).flat_map(|_| colour).collect();
+        enc.write_header().unwrap().write_image_data(&data).unwrap();
+        v
+    }
+
+    #[test]
+    fn slices_join_top_to_bottom() {
+        let parts = vec![png_of(4, 3, [255, 0, 0]), png_of(4, 2, [0, 0, 255]), png_of(3, 1, [0, 255, 0])];
+        let mut out = Vec::new();
+        assert_eq!(join_pngs(&parts, &mut out).unwrap(), (4, 6));
+        let mut rd = png::Decoder::new(std::io::Cursor::new(out)).read_info().unwrap();
+        let mut buf = vec![0; rd.output_buffer_size()];
+        rd.next_frame(&mut buf).unwrap();
+        let px = |x: usize, y: usize| &buf[(y * 4 + x) * 4..(y * 4 + x) * 4 + 4];
+        assert_eq!(px(0, 0), [255, 0, 0, 255]);
+        assert_eq!(px(3, 4), [0, 0, 255, 255]);
+        assert_eq!(px(0, 5), [0, 255, 0, 255]);
+        assert_eq!(px(3, 5), [255, 255, 255, 255], "a narrower slice is padded with white");
+        assert!(join_pngs(&[], Vec::new()).is_err());
+    }
+
     #[test]
     fn base64_matches_the_standard() {
         assert_eq!(b64(b""), "");

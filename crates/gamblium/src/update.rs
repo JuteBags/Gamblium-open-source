@@ -62,6 +62,23 @@ pub fn pick(releases: &Value, current: &str) -> Option<(String, String, String)>
     best
 }
 
+/// A download that is not newer than this program (it was installed meanwhile, or a test asked as
+/// an older version) is forgotten: its folder goes and the state says up to date. Run before any
+/// status is shown and by every check (tester, Nov 14 2026: a 185 MB leftover stayed "ready").
+pub fn forget_stale(current: &str) {
+    let Some(d) = dir() else { return };
+    for e in fs::read_dir(&d).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if e.path().is_dir() && version_key(&name).is_some() && !newer(&name, current) {
+            let _ = fs::remove_dir_all(e.path());
+        }
+    }
+    let s = state();
+    if s["state"] == "ready" && !s["version"].as_str().is_some_and(|v| newer(v, current)) {
+        set_state(json!({ "state": "up-to-date", "current": current, "at": s["at"] }));
+    }
+}
+
 pub fn state() -> Value {
     dir().and_then(|d| fs::read_to_string(d.join("state.json")).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({ "state": "idle" }))
 }
@@ -110,6 +127,7 @@ pub fn check_and_download(current: &str) -> Result<Value, String> {
         let text = agent().get(RELEASES).call().map_err(|e| e.to_string())?.into_string().map_err(|e| e.to_string())?;
         let releases: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
         let Some((version, setup_url, sums_url)) = pick(&releases, current) else {
+            forget_stale(current);
             let v = json!({ "state": "up-to-date", "current": current, "at": now() });
             set_state(v.clone());
             return Ok(v);

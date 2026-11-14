@@ -77,8 +77,10 @@ pub fn install(extension_id: &str, remove: bool) -> Result<String, String> {
 
 /// Browsers refuse messages from a host above 1 MB.
 const MAX_REPLY: usize = 1024 * 1024;
-/// And they never send more than 4 GB; we accept far less.
-const MAX_REQUEST: usize = 8 * 1024 * 1024;
+/// And they never send more than 4 GB; we accept far less, but enough for a whole-page picture:
+/// up to 100000 px in slices of a busy page is tens of MB in base64. At 8 MB a real 54000 px
+/// article ended the helper, and with it the session's commands (tester, Nov 14 2026).
+const MAX_REQUEST: usize = 192 * 1024 * 1024;
 
 pub fn read_message(input: &mut impl Read) -> io::Result<Option<Value>> {
     let mut len = [0u8; 4];
@@ -183,8 +185,12 @@ pub fn handle(req: &Value, browser_pid: Option<u32>) -> Result<Value, String> {
         // handed to the running browser of this profile.
         // Updates (update.rs). "update-check" starts a check-and-download in its own process (the
         // extension asks once per browser start, with force) and answers with where things stand.
-        "update-status" => Ok(json!({ "current": env!("CARGO_PKG_VERSION"), "update": crate::update::state(), "ready": crate::update::ready_installer(env!("CARGO_PKG_VERSION")).is_some() })),
+        "update-status" => Ok({
+            crate::update::forget_stale(env!("CARGO_PKG_VERSION"));
+            json!({ "current": env!("CARGO_PKG_VERSION"), "update": crate::update::state(), "ready": crate::update::ready_installer(env!("CARGO_PKG_VERSION")).is_some() })
+        }),
         "update-check" => {
+            crate::update::forget_stale(env!("CARGO_PKG_VERSION"));
             let st = crate::update::state();
             let age = st["at"].as_u64().map(|t| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0).saturating_sub(t)).unwrap_or(u64::MAX);
             let force = req.get("force").and_then(Value::as_bool).unwrap_or(false);

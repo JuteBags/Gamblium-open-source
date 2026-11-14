@@ -8,6 +8,7 @@ import {
   CARDS, cardSize, moveCard, nudgeCard, sizeCard, snapSize, rowsFor, readLayout,
 } from './logic.js';
 import { $, el, send, openPage } from '../ui/page.js';
+import { GROUP_COLOURS } from '../ui/pages-logic.js';
 import { siteIcon, siteIconEl, monogram, guardIcon } from '../site-icons.js';
 import { resolve, suggestRoutes } from '../routes.js'; // also brings the stored colour scheme up to date
 
@@ -375,7 +376,10 @@ async function loadClosed() {
     for (const { at, c, g } of rows) {
       if (g) {
         const n = g.tabs.length;
-        items.push(row({ icon: glyph(GLYPH.window), text: `${g.title || 'Group'} · ${n} tab${n === 1 ? '' : 's'}`, note: ago(at, now), title: 'Reopen this group as it was', act: () => send({ type: 'group-reopen', id: g.id }).then(loadClosed) }));
+        // The group's own colour, as its chip had in the tab strip.
+        const dot = el('span', { className: 'gdot', ariaHidden: 'true' });
+        dot.style.setProperty('--group', GROUP_COLOURS[g.color] ?? GROUP_COLOURS.grey);
+        items.push(row({ icon: dot, text: `${g.title || 'Group'} · ${n} tab${n === 1 ? '' : 's'}`, note: ago(at, now), title: 'Reopen this group as it was', act: () => send({ type: 'group-reopen', id: g.id }).then(loadClosed) }));
         continue;
       }
       const when = ago((c.lastModified ?? 0) * 1000, now);

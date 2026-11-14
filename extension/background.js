@@ -127,14 +127,21 @@ async function forgetCloudflareCheck(url) {
   try { origin = new URL(url).origin; } catch { return; }
   const host = new URL(origin).hostname;
   const site = host.split(".").slice(-2).join(".");
-  for (const c of await chrome.cookies.getAll({ domain: site }).catch(() => [])) {
-    const scheme = c.secure ? "https://" : "http://";
-    await chrome.cookies.remove({ url: scheme + c.domain.replace(/^\./, "") + c.path, name: c.name, storeId: c.storeId }).catch(() => {});
+  // The check itself runs in a frame from challenges.cloudflare.com, which keeps its own cookies
+  // and storage (tester, Nov 14 2026: a window try after a hidden one still failed 0/4).
+  const said = [];
+  for (const domain of [site, "challenges.cloudflare.com"]) {
+    for (const c of await chrome.cookies.getAll({ domain }).catch((e) => (said.push(`cookies ${domain}: ${e.message}`), []))) {
+      const scheme = c.secure ? "https://" : "http://";
+      await chrome.cookies.remove({ url: scheme + c.domain.replace(/^\./, "") + c.path, name: c.name, storeId: c.storeId }).catch((e) => said.push(`cookie ${c.name}: ${e.message}`));
+    }
   }
   if (chrome.browsingData) {
-    const origins = [...new Set([origin, "https://" + site, "https://www." + site])];
-    await chrome.browsingData.remove({ origins }, { cache: true, cacheStorage: true, cookies: true, fileSystems: true, indexedDB: true, localStorage: true, serviceWorkers: true, webSQL: true }).catch(() => {});
+    const origins = [...new Set([origin, "https://" + site, "https://www." + site, "https://challenges.cloudflare.com"])];
+    await chrome.browsingData.remove({ origins }, { cache: true, cacheStorage: true, cookies: true, fileSystems: true, indexedDB: true, localStorage: true, serviceWorkers: true }).catch((e) => said.push(`browsingData: ${e.message}`));
   }
+  if (said.length) console.warn("forgetCloudflareCheck:", said.join("; "));
+  return { forgot: origin, errors: said };
 }
 
 // Stops a tab now (a check for people an agent cannot pass).
@@ -2051,6 +2058,35 @@ async function reopenAfterUpdate() {
   }
   await sessionDelete({ name: r.name });
 }
+
+// ---- The popup lights the tab it points at in the strip (#225 for the popup) ----------------
+// The tab joins its window's selection beside the tab in front. The popup's own script ends the
+// moment it closes, so the light is held here and taken off when its port goes: a selection is
+// what Ctrl+W closes and must never be left behind. One request at a time, in order.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "tab-light") return;
+  let lit = null;
+  let queue = Promise.resolve();
+  const off = async () => {
+    if (!lit) return;
+    const id = lit;
+    lit = null;
+    const t = await chrome.tabs.get(id).catch(() => null);
+    if (t && t.highlighted && !t.active) await chrome.tabs.update(id, { highlighted: false }).catch(() => {});
+  };
+  const on = async (tabId) => {
+    if (tabId === lit) return;
+    await off();
+    const t = tabId ? await chrome.tabs.get(tabId).catch(() => null) : null;
+    if (!t) return;
+    const [front] = await chrome.tabs.query({ windowId: t.windowId, active: true });
+    if (!front || front.id === t.id) return;
+    lit = t.id;
+    await chrome.tabs.highlight({ windowId: t.windowId, tabs: [front.index, t.index] }).catch(() => { lit = null; });
+  };
+  port.onMessage.addListener((m) => { queue = queue.then(() => on(Number(m?.tabId) || 0)); });
+  port.onDisconnect.addListener(() => { queue = queue.then(off); });
+});
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   const ours = _sender.origin ? _sender.origin === OUR_ORIGIN : String(_sender.url || "").startsWith(OUR_ORIGIN + "/");

@@ -6,7 +6,7 @@
 import { $, send, el, td, pill, button, whileVisible } from './page.js';
 import {
   fmtMb, fmtPct, fmtDelay, siteLabel, stateOf, countStates, statesLine, tabPill, sortTabs, meterPct, weightOf, freeLevel, cpuLevel, WEIGHT_MB, kindRows, reasonRows,
-  filterTabs, mapBlocks, groupByWindow,
+  filterTabs, mapBlocks, groupByWindow, GROUP_COLOURS,
 } from './pages-logic.js';
 
 let sortKey = 'memory';
@@ -66,6 +66,7 @@ function renderMap() {
     const label = `${nameOf(r)}, ${r.state}${r.memoryMb === null ? '' : ', ' + fmtMb(r.memoryMb)}`;
     const node = el('button', { type: 'button', className: `block ${r.state}`, title: label });
     node.dataset.weight = weightOf(r.memoryMb);
+    node.dataset.tab = String(r.tabId);
     node.setAttribute('role', 'listitem');
     node.setAttribute('aria-label', label);
     node.style.flexGrow = String(b.grow);
@@ -219,7 +220,9 @@ function renderGroups(stats) {
       $('groups').querySelector('.limitedit')?.remove();
       renderGroups(stats);
     });
-    const tr = el('tr', {}, [td(el('span', { className: `gdot g-${g.color}`, textContent: g.title || 'Unnamed group' })), td(`${g.awake}/${g.tabs}`, 'num'), td(fmtMb(g.memoryMb), 'num'), td(fmtPct(g.cpuPct), 'num'), td(limit, 'num')]);
+    const name = el('span', { className: 'gdot', textContent: g.title || 'Unnamed group' });
+    name.style.setProperty('--group', GROUP_COLOURS[g.color] ?? GROUP_COLOURS.grey); // its colour in the tab strip
+    const tr = el('tr', {}, [td(name), td(`${g.awake}/${g.tabs}`, 'num'), td(fmtMb(g.memoryMb), 'num'), td(fmtPct(g.cpuPct), 'num'), td(limit, 'num')]);
     return limitEditing === g.title ? [tr, limitEditor(g)] : [tr];
   }).flat();
   $('groups').replaceChildren(el('div', { className: 'tablewrap' }, el('table', {}, [el('thead', {}, head), el('tbody', {}, body)])));
@@ -343,3 +346,47 @@ const refresh = whileVisible(async () => {
 }, 5000);
 // Processor use needs two readings; take the second one soon after the first.
 setTimeout(() => document.visibilityState === 'visible' && read({ keepTable: true }), 1500);
+
+// ---- Pointing at a tab lights it in the tab strip (owner, Nov 14 2026) ----------------------
+// The tab is added to the window's selection, which the strip draws lit, while this page stays
+// the one shown. A selection is what Ctrl+W closes, so the light goes the moment Ctrl (or any
+// key) is pressed, and when the pointer leaves, the page loses focus or is hidden. Only tabs in
+// this page's window can be lit.
+// Unlighting only takes that one tab out of the selection, and never a tab that is now the one
+// shown (the user may have clicked it): selecting this page again would bring it back to front.
+let lit = null;
+async function light(tabId) {
+  if (tabId === lit) return;
+  const before = lit;
+  lit = tabId;
+  try {
+    if (before) {
+      const b = await chrome.tabs.get(before).catch(() => null);
+      if (b && b.highlighted && !b.active) await chrome.tabs.update(before, { highlighted: false });
+    }
+    if (!tabId || document.visibilityState !== 'visible') return;
+    const me = await chrome.tabs.getCurrent();
+    const t = await chrome.tabs.get(tabId).catch(() => null);
+    if (!me || !me.active || !t || t.id === me.id || t.windowId !== me.windowId) return;
+    if (lit !== tabId) return; // pointed somewhere else meanwhile
+    await chrome.tabs.highlight({ windowId: me.windowId, tabs: [me.index, t.index] });
+  } catch { /* the tab went away */ }
+}
+const unlight = () => { if (lit !== null) light(null); };
+// The page lights the same tab where it shows it twice: its row and its memory block, together.
+function markLit(id) {
+  for (const n of document.querySelectorAll('.lit')) if (Number(n.dataset.tab) !== id) n.classList.remove('lit');
+  if (id) for (const n of document.querySelectorAll(`#rows [data-tab="${id}"], #map [data-tab="${id}"]`)) n.classList.add('lit');
+}
+for (const box of [$('rows'), $('map')]) {
+  box.addEventListener('pointerover', (e) => {
+    const id = Number(e.target.closest('[data-tab]')?.dataset.tab);
+    markLit(id || 0);
+    if (id) light(id); else unlight();
+  });
+  box.addEventListener('pointerleave', () => { markLit(0); unlight(); });
+}
+addEventListener('keydown', unlight, true);
+addEventListener('blur', unlight);
+addEventListener('pagehide', unlight);
+document.addEventListener('visibilitychange', unlight);

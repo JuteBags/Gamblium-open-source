@@ -1,3 +1,4 @@
+@import url("../ui/controls.css");
 /* Gamblium new tab. One column: hello and time, search, quick access; under
    it a deck of small panels the user chooses. Glass on the scheme's ground,
    lit from above. Nothing moves by itself: transitions on hover, focus and
@@ -118,8 +119,9 @@ main { width: min(100% - 32px, 1120px); margin: 0 auto; padding-top: clamp(20px,
    (The general rule for a focused text field further down would otherwise draw one.) */
 .search input[type="text"]:focus { background: transparent; box-shadow: none; }
 .search input::placeholder { color: var(--meta); opacity: 1; }
-.search button { flex: none; height: 42px; padding: 0 20px; border: 0; border-radius: 999px; background: var(--text); color: var(--bg); font: 600 14px/1 var(--font-ui); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5); }
-.search button:hover { background: color-mix(in srgb, var(--text) 86%, var(--bg)); }
+.search button { flex: none; height: 42px; padding: 0 20px; border: 0; border-radius: 999px; background: var(--ctl-primary); color: var(--ctl-primary-ink); font: 600 14px/1 var(--font-ui); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5); }
+.search button:hover { background: var(--ctl-primary-hover); }
+.search button:active { background: var(--ctl-primary-press); transform: var(--ctl-press-shift); }
 
 /* What the search offers while you type. It pops up, so it sits highest. */
 .suggest {
@@ -206,6 +208,8 @@ input::placeholder, textarea::placeholder { color: var(--meta); opacity: 1; }
 .rows li { position: relative; }
 .rows a, .rows .row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; height: 38px; padding: 0 8px; border: 0; border-radius: var(--r-control); background: none; color: inherit; text-align: left; text-decoration: none; }
 .rows a:hover, .rows .row:hover, .rows li:focus-within > a { background: var(--nested); }
+/* A closed tab group in Recently closed: its colour from the tab strip. */
+.rows .gdot { width: 10px; height: 10px; margin: 0 3px; border-radius: 50%; background: var(--group); box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 25%, transparent); }
 .rows img, .rows svg { width: 16px; height: 16px; border-radius: 4px; color: var(--meta); }
 .rows .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rows .meta { font-size: 12px; color: var(--meta); font-variant-numeric: tabular-nums; }

@@ -442,6 +442,17 @@ fn main() {
                 launch::find_home()
                     .ok_or("cannot find the Gamblium folder (extension/, presets/). Set GAMBLIUM_HOME".to_string())
                     .and_then(|home| install::install(&home, dry_run))
+                    .map(|mut lines| {
+                        // The installed patchers may be newer than the copy: make it again now
+                        // (or at the next start, if a Gamblium runs from it).
+                        let app = std::env::var_os("LOCALAPPDATA").map(|d| std::path::PathBuf::from(d).join("Gamblium").join("app"));
+                        if let (false, Some(app)) = (dry_run, app.filter(|a| a.join("tools").join("rebrand").is_dir())) {
+                            if let Some(line) = rebrand::refresh_if_needed(std::path::Path::new(launch::DEFAULT_BRAVE), &app) {
+                                lines.push(line);
+                            }
+                        }
+                        lines
+                    })
             };
             match result {
                 Ok(lines) => lines.iter().for_each(|l| println!("{l}")),
@@ -503,6 +514,7 @@ fn main() {
                 }
             } else {
                 let _ = status;
+                update::forget_stale(current);
                 println!("{}", serde_json::json!({ "current": current, "update": update::state() }));
             }
         }
@@ -731,7 +743,22 @@ fn ctl_with(bridge: &host::BridgeInfo, op: &str, args: &[String], timeout: u64) 
     let mut answer = host::ctl(bridge, &cmd, timeout * 1000)?;
     // out=<path>: save the result to a file instead of printing it all.
     if let Some(out) = cmd["out"].as_str() {
-        if let Some(data) = answer["dataUrl"].as_str() {
+        if let Some(parts) = answer["parts"].as_array() {
+            // A long page comes in slices; they become one picture here.
+            let mut pngs = Vec::new();
+            for p in parts {
+                let data = p.as_str().unwrap_or_default();
+                pngs.push(host::decode_base64(data.split_once(',').map(|x| x.1).unwrap_or(data)).ok_or("the browser sent a broken image")?);
+            }
+            let file = std::fs::File::create(out).map_err(|e| format!("{out}: {e}"))?;
+            let (w, h) = capture::join_pngs(&pngs, std::io::BufWriter::new(file))?;
+            answer["parts"] = serde_json::Value::Null;
+            answer["slices"] = serde_json::json!(pngs.len());
+            answer["width"] = serde_json::json!(w);
+            answer["height"] = serde_json::json!(h);
+            answer["bytes"] = serde_json::json!(std::fs::metadata(out).map(|m| m.len()).unwrap_or(0));
+            answer["saved"] = serde_json::json!(out);
+        } else if let Some(data) = answer["dataUrl"].as_str() {
             let b64 = data.split_once(',').map(|x| x.1).unwrap_or(data);
             let bytes = host::decode_base64(b64).ok_or("the browser sent a broken image")?;
             std::fs::write(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
@@ -992,6 +1019,18 @@ fn run_launch(mut a: LaunchArgs) -> Result<(), String> {
     // Gamblium's own browser: the installed copy (which came with the package,
     // or was made from the installed Brave and still matches it), or else the
     // one in the folder this program was started from (a package not installed).
+    // The copy is made again by itself when it is out of date (owner: nobody should have to run
+    // `gamblium rebrand`). Only when no Gamblium runs from it; otherwise at a later start.
+    // From the installed programs only: a test window with GAMBLIUM_HOME on a branch must never
+    // remake everybody's copy with that branch's patchers.
+    let installed_home = std::env::var_os("LOCALAPPDATA").map(|d| std::path::PathBuf::from(d).join("Gamblium").join("app"));
+    if !dry_run && !a.official && std::env::var_os("GAMBLIUM_HOME").is_none() {
+        if let Some(home) = installed_home.filter(|h| h.join("tools").join("rebrand").is_dir()) {
+            if let Some(line) = rebrand::refresh_if_needed(&brave, &home) {
+                println!("{line}");
+            }
+        }
+    }
     let brave = match (a.official || rebrand::wants_official(), rebrand::copy_dir()) {
         (false, Some(copy)) => match rebrand::state(&brave, &copy) {
             rebrand::Copy::Fresh(exe) => {
@@ -999,7 +1038,7 @@ fn run_launch(mut a: LaunchArgs) -> Result<(), String> {
                 exe
             }
             rebrand::Copy::Stale { copy, installed } => {
-                println!("note: the rebranded copy is for Brave {copy} but Brave {installed} is installed. Starting the official Brave; run `gamblium rebrand` to refresh the copy.");
+                println!("note: the rebranded copy is for Brave {copy} but Brave {installed} is installed, and it could not be made again now (in use?). Starting the official Brave; the copy is refreshed at a later start.");
                 brave
             }
             rebrand::Copy::None => match rebrand::packaged_browser() {
@@ -1209,6 +1248,17 @@ fn run_launch(mut a: LaunchArgs) -> Result<(), String> {
             if launch::ensure_pinned(&prefs_dir, profile, host::EXTENSION_ID, dry_run).map_err(|e| format!("Preferences: {e}"))? {
                 println!("profile prefs {tag} ({profile}): Gamblium's button pinned at the right end of the toolbar");
             }
+            // Translation off once for profiles made before it was the default (#231; owner's yes,
+            // Nov 14 2026): no "Translate this page?" bubble popping up by itself. Once only, so a
+            // person who turns it back on keeps it.
+            let marker = prefs_dir.join("gamblium-translate-off");
+            if !dry_run && !marker.exists() {
+                let mut off = serde_json::Map::new();
+                off.insert("translate.enabled".into(), serde_json::json!(false));
+                launch::apply_preferences(&prefs_dir, profile, &off, false).map_err(|e| format!("Preferences: {e}"))?;
+                let _ = std::fs::write(&marker, "");
+                println!("profile prefs changed ({profile}): translate.enabled = false (once)");
+            }
         }
     }
     // The preference is a registry entry named after the program's path. A
@@ -1232,7 +1282,9 @@ fn run_launch(mut a: LaunchArgs) -> Result<(), String> {
     }
     // Once per profile: let our extension work in private and Tor windows too.
     let loads_extension = args.iter().any(|x| x.starts_with("--load-extension="));
-    if loads_extension && !running && !a.hidden && !a.agent && !private::already_done(&prefs_dir, host::EXTENSION_ID) {
+    if loads_extension && !running && !a.hidden && !a.agent && private::failed_before(&prefs_dir, host::EXTENSION_ID) {
+        println!("private windows: not tried again (it failed before; delete gamblium-private-access.failed in the profile folder to retry)");
+    } else if loads_extension && !running && !a.hidden && !a.agent && !private::already_done(&prefs_dir, host::EXTENSION_ID) {
         match private::allow(&brave, &prefs_dir, &args, host::EXTENSION_ID) {
             Ok(()) => println!("private windows: the Gamblium extension is now allowed in private and Tor windows"),
             Err(e) => println!("private windows: could not switch the extension on there ({e}); it can be done by hand under Extensions > Gamblium > Allow in Private"),

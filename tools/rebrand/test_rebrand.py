@@ -206,5 +206,40 @@ class PanelPage(unittest.TestCase):
         self.assertIn(R.PANEL_STYLE, out)
         self.assertNotIn("#root", out.split("</style>")[0].split(R.PANEL_STYLE)[1])
 
+class QuietTor(unittest.TestCase):
+    PAGE = ('else 2===t.connectionStatus?(r=bn("x")):i&&(a="torStatusInitializing",l={$1:t.progress},'
+            'r=function(t,n,r){return t}(bn(a),l,s),n=t.message,o=e.createElement(ar,null));')
+
+    def test_the_bootstrap_line_goes_and_the_progress_stays(self):
+        text, notes = R.quiet_tor(self.PAGE)
+        self.assertIn('(bn(a),l,s),n="",o=', text)
+        self.assertIn("torStatusInitializing", text)
+        self.assertEqual(notes, ["Tor's bootstrap line under the progress: hidden"])
+
+    def test_an_unknown_page_is_left_alone(self):
+        self.assertEqual(R.quiet_tor("other")[0], "other")
+
+
+class QuietSettings(unittest.TestCase):
+    PAGE = ('<controlled-radio-button no-extension-indicator=""></controlled-radio-button>\n'
+            '      ${this.ntpExtension_?html$2`<extension-controlled-indicator></extension-controlled-indicator>`:""}\n'
+            '<a role="menuitem" id="origin" href="/origin" class="cr-nav-menu-item" ?hidden="${this.shouldHideMenuItem_(this.pageVisibility_?.origin)}">\n'
+            'if(pageVisibility.origin){r.ORIGIN=r.BASIC.createSection("/origin","origin")}\n'
+            '<settings-section\n  id="newTab"\n  page-title="$i18n{braveNewTab}">')
+
+    def test_the_four_are_hidden(self):
+        text, notes = R.quiet_settings(self.PAGE)
+        self.assertIn("${false&&this.ntpExtension_?html$2`", text)
+        self.assertIn('class="cr-nav-menu-item" hidden="">', text)
+        self.assertIn("if(false){r.ORIGIN=", text)
+        self.assertIn('<settings-section hidden\n  id="newTab"', text)
+        self.assertTrue(all(n.endswith(": hidden") for n in notes), notes)
+
+    def test_an_unknown_page_is_left_alone(self):
+        text, notes = R.quiet_settings("nothing like it")
+        self.assertEqual(text, "nothing like it")
+        self.assertTrue(all("left alone" in n for n in notes), notes)
+
+
 if __name__ == "__main__":
     unittest.main()

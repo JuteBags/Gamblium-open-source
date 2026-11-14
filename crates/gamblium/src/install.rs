@@ -28,6 +28,30 @@ fn skip(name: &str) -> bool {
 }
 
 /// Copies a folder tree. Returns the number of files written.
+/// Copies a program over the installed one. A running program cannot be overwritten on Windows,
+/// but it can be renamed: a download or torrent still running keeps the old file under
+/// `<name>.old-<n>`, and the next install removes those once nothing holds them.
+pub fn replace_program(from: &Path, to: &Path) -> std::io::Result<()> {
+    let name = to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    if let Some(dir) = to.parent() {
+        for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+            if e.file_name().to_string_lossy().starts_with(&format!("{name}.old-")) {
+                let _ = fs::remove_file(e.path());
+            }
+        }
+    }
+    match fs::copy(from, to) {
+        Ok(_) => Ok(()),
+        Err(first) => {
+            let aside = (0..100).map(|n| to.with_file_name(format!("{name}.old-{n}"))).find(|p| !p.exists()).ok_or(first)?;
+            fs::rename(to, &aside)?;
+            fs::copy(from, to).map(|_| ()).inspect_err(|_| {
+                let _ = fs::rename(&aside, to); // put the old one back rather than leave none
+            })
+        }
+    }
+}
+
 pub fn copy_tree(from: &Path, to: &Path) -> std::io::Result<usize> {
     let mut n = 0;
     fs::create_dir_all(to)?;
@@ -105,7 +129,7 @@ pub fn install(home: &Path, dry_run: bool) -> Result<Vec<String>, String> {
             }
             let dest = app.join(exe.file_name().unwrap());
             if exe.as_path() != dest {
-                fs::copy(exe, &dest).map_err(|e| format!("{}: {e} (is Gamblium running?)", dest.display()))?;
+                replace_program(exe, &dest).map_err(|e| format!("{}: {e} (is Gamblium running?)", dest.display()))?;
             }
         }
     }

@@ -266,9 +266,9 @@ async function loadProfile() {
   // The user-agent string says "157.0.0.0" on purpose (reduced); the brand list has the real major version.
   const chromium = (navigator.userAgentData?.brands ?? []).find((x) => x.brand === 'Chromium')?.version;
   const brave = ping.ok === false ? '' : ping.braveVersion || '';
-  // "1.0.0 beta" (version_name) where there is one; the helper says "1.0.0-beta.1" for the same build.
+  // "1.0.0 beta 2" (version_name) where there is one; the helper says "1.0.0-beta.2" for the same build.
   const shown = m.version_name || m.version;
-  const sameBuild = (h) => String(h || '').replace(/-beta(\.\d+)?$/, ' beta') === shown || h === m.version;
+  const sameBuild = (h) => versionLabel(h) === shown || h === m.version;
   const rows = [['Version', `${shown} on Brave${brave ? ' ' + brave : ''}${chromium ? ` (Chromium ${chromium})` : ''}`]];
   if (ping.ok === false) rows.push(['Helper', 'not reachable; run "gamblium install-host"']);
   else {

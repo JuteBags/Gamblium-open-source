@@ -1,0 +1,36 @@
+/* Controls: one accent system for every surface (owner's polish list, Nov 14 2026). Imported first by
+   app.css (our pages and the popup), newtab.css and welcome.css; each surface keeps its own sizes and
+   uses these colours. Built from the surface's own --text and --bg, so every scheme, light or dark,
+   gets its own.
+   Three kinds, each with rest, hover and pressed:
+   - primary: the one main action of a screen, the filled ink pill
+   - quiet (secondary): a light ink tint with a rim
+   - danger: a red tint, for actions that remove, close or open a door (Always allow)
+   and one state colour: good (green), for a ready update or a finished job.
+   Red, green and the facet blue keep one meaning each across the product. */
+:root {
+  --ctl-fill: color-mix(in srgb, var(--text) 7%, transparent);
+  --ctl-fill-hover: color-mix(in srgb, var(--text) 12%, transparent);
+  --ctl-fill-press: color-mix(in srgb, var(--text) 18%, transparent);
+  --ctl-rim: color-mix(in srgb, var(--text) 14%, transparent);
+  --ctl-primary: var(--text);
+  --ctl-primary-ink: var(--bg);
+  --ctl-primary-hover: color-mix(in srgb, var(--text) 86%, var(--bg));
+  --ctl-primary-press: color-mix(in srgb, var(--text) 74%, var(--bg));
+  --ctl-danger-ink: color-mix(in oklab, #ff6b7a 72%, var(--text));
+  --ctl-danger: color-mix(in oklab, #ff6b7a 16%, transparent);
+  --ctl-danger-hover: color-mix(in oklab, #ff6b7a 24%, transparent);
+  --ctl-danger-press: color-mix(in oklab, #ff6b7a 32%, transparent);
+  --ctl-good-ink: color-mix(in oklab, #3fc483 72%, var(--text));
+  --ctl-good: color-mix(in oklab, #3fc483 16%, transparent);
+  --ctl-good-hover: color-mix(in oklab, #3fc483 24%, transparent);
+  --ctl-press-shift: translateY(1px);
+}
+/* On a light ground the red and green inks are deep ones (a light red stays light whatever it is mixed
+   with): 5.4:1 or better on their 16% fill over every light ground. Our pages follow the system; the
+   welcome page sets its look by attribute. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-look]) { --ctl-danger-ink: #a3162a; --ctl-good-ink: #10683a; }
+}
+[data-look="light"], [data-shows="light"] { --ctl-danger-ink: #a3162a; --ctl-good-ink: #10683a; }
+[data-look] [data-shows="dark"] { --ctl-danger-ink: color-mix(in oklab, #ff6b7a 72%, var(--text)); --ctl-good-ink: color-mix(in oklab, #3fc483 72%, var(--text)); }

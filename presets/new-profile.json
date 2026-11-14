@@ -12,6 +12,7 @@
     "extensions.pinned_extensions": [
       "pbgbdlkcienglhbfadbjolphinilbpia"
     ],
-    "download.prompt_for_download": false
+    "download.prompt_for_download": false,
+    "translate.enabled": false
   }
 }

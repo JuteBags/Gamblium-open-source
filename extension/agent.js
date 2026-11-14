@@ -461,6 +461,9 @@ async function withDebugger(tabId, fn) {
 // pointed at or photographed. For the length of one command the page is lent
 // a size; it is taken back when the debugger detaches.
 const LENT = { width: 1280, height: 800 };
+// A whole-page picture: slices of this height, and never taller than FULL_MAX in all.
+const FULL_SLICE = 8000;
+const FULL_MAX = 100000;
 async function lendViewport(send) {
   const m = await send("Page.getLayoutMetrics");
   const v = m.cssLayoutViewport || m.layoutViewport;
@@ -547,16 +550,48 @@ function realScreenshot(tabId, full) {
     const params = { format: "png" };
     await lendViewport(send);
     if (full) {
-      // Make the page as tall as its content for this one picture.
+      // The whole page, in slices: the browser draws at most 16000 px in one go (a taller
+      // picture came back cut at 16000 with ok: true; tester, Nov 14 2026). Each slice is a clip
+      // of the page beyond the viewport; the program joins them (out=). Pages taller than
+      // FULL_MAX are cut there, and say so.
       const m = await send("Page.getLayoutMetrics");
       const size = m.cssContentSize || m.contentSize;
       const view = m.cssLayoutViewport || m.layoutViewport;
-      await send("Emulation.setDeviceMetricsOverride", {
-        width: Math.max(1, Math.round(view.clientWidth || LENT.width)),
-        height: Math.max(1, Math.min(Math.ceil(size.height), 16000)),
-        deviceScaleFactor: 1,
-        mobile: false,
-      });
+      const width = Math.max(1, Math.round(view.clientWidth || LENT.width));
+      const pageHeight = Math.max(1, Math.ceil(size.height));
+      const height = Math.min(pageHeight, FULL_MAX);
+      const viewport = (h) => send("Emulation.setDeviceMetricsOverride", { width, height: h, deviceScaleFactor: 1, mobile: false });
+      // Up to one drawing's limit: the page made as tall as its content, one picture (as before).
+      // Clips beyond the viewport never answered on hidden and minimised pages (tester, #234).
+      if (height <= FULL_SLICE * 2) {
+        await viewport(height);
+        const shot = await send("Page.captureScreenshot", params);
+        return { ok: true, real: true, tab: tabId, dataUrl: "data:image/png;base64," + shot.data, pageHeight, capturedHeight: height, truncated: false };
+      }
+      // Taller. A real window cannot draw a viewport over about 16000 px (the picture never
+      // answers), and when minimised a scroll draws no new frame; tried: scrolling, a resize after
+      // each scroll, the emulated visible area. So in a window a taller page gives its top 16000 px
+      // and says truncated.
+      if (!/Headless/.test(navigator.userAgent)) {
+        const top = FULL_SLICE * 2;
+        await viewport(top);
+        const shot = await send("Page.captureScreenshot", params);
+        return { ok: true, real: true, tab: tabId, dataUrl: "data:image/png;base64," + shot.data, pageHeight, capturedHeight: top, truncated: true, hint: "in a window a picture stops at 16000 px; hide the session (gamblium-cli hide) for the whole page" };
+      }
+      // With no window: a viewport one slice tall, the page scrolled to each slice in turn; the
+      // last slice's viewport is what is left, so it ends exactly at the bottom. (A viewport as tall
+      // as the whole page worked on a plain test page but ended the browser on a real 54000 px
+      // article: tester, Nov 14 2026. One slice at a time keeps the drawing small.)
+      const parts = [];
+      for (let y = 0; y < height; y += FULL_SLICE) {
+        const h = Math.min(FULL_SLICE, height - y);
+        await viewport(h);
+        await send("Runtime.evaluate", { expression: `window.scrollTo(0, ${y}); new Promise((r) => setTimeout(r, 60))`, awaitPromise: true });
+        const shot = await send("Page.captureScreenshot", params);
+        parts.push("data:image/png;base64," + shot.data);
+      }
+      await send("Runtime.evaluate", { expression: "window.scrollTo(0, 0)" });
+      return { ok: true, real: true, tab: tabId, parts, pageHeight, capturedHeight: height, truncated: height < pageHeight };
     }
     const shot = await send("Page.captureScreenshot", params);
     return { ok: true, real: true, tab: tabId, dataUrl: "data:image/png;base64," + shot.data };

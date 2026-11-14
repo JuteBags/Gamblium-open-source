@@ -1066,7 +1066,7 @@ def version_changes(version):
     """Changes that need Gamblium's own version (owner, Nov 13 2026): it is the version people see,
     Brave's sits under it, small. No Gamblium account exists, so its card goes. The private copy never
     updates itself, so the About page does not check for updates; it says how updates come."""
-    v = re.sub(rb"[^0-9A-Za-z.+-]", b"", version.encode())[:20]
+    v = re.sub(rb"[^0-9A-Za-z.+ -]", b"", version.encode()).strip()[:20]  # "1.0.0 beta 2", spaces kept
     small = b'style="font-size:11px;opacity:.7"'
     return [
         ("account card", re.compile(rb'(<template is="dom-if" if="\[\[accountState_\.loggedOut\]\]">)\s*<brave-account-row></brave-account-row>\s*(</template>)'),

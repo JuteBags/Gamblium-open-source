@@ -306,6 +306,63 @@ def is_token_sheet(text):
     return text.lstrip().startswith("/*") and text.count("--leo-color-") > 200 and ":root" in text[:400]
 
 
+# ---- the settings page: what cannot be closed or explained (owner's polish list, Nov 14 2026) ----
+# - Under "On startup", a box says "Gamblium is controlling this setting" with Manage and Disable: the
+#   settings page draws it for any extension that supplies the new tab page, and ours is Gamblium itself.
+#   Its template condition becomes false, so the box is never drawn; the choices stay.
+# - "Brave Origin" (a paid version of Brave) in the settings menu, and its page: the entry is hidden and
+#   the page's route is not made. (Its card on the System page is gone through --disable-features.)
+# - Get started > "New Tab Page" ("New tab page shows", "Customize new tab page") sets Brave's own new tab
+#   page, which ours replaces in normal windows; private and Tor windows have their own fixed page. So
+#   nothing it changes can be seen: the section is hidden (critique, Nov 14 2026).
+# Found by content in the settings bundle, so a new Brave with other names leaves it alone and says so.
+_STARTUP_BOX = re.compile(r"\$\{this\.ntpExtension_\?html")
+_ORIGIN_ENTRY = re.compile(r'(id="origin" href="/origin" class="cr-nav-menu-item" )\?hidden="\$\{this\.shouldHideMenuItem_\(this\.pageVisibility_\?\.origin\)\}"')
+_ORIGIN_ROUTE = re.compile(r"if\(pageVisibility\.origin\)\{r\.ORIGIN=")
+_NEW_TAB_SECTION = re.compile(r'<settings-section(\s+id="newTab"\s+page-title="\$i18n\{braveNewTab\}")')
+
+
+def is_settings_bundle(body):
+    return b"settings-on-startup-page" in body and b"cr-nav-menu-item" in body
+
+
+def quiet_settings(text):
+    """-> (text, [notes]). Each change is made only where its pattern is found exactly once."""
+    notes = []
+    for what, pat, new in (
+        ("the 'controlling this setting' box under On startup", _STARTUP_BOX, lambda m: "${false&&this.ntpExtension_?html"),
+        ("the Brave Origin menu entry", _ORIGIN_ENTRY, lambda m: m.group(1) + 'hidden=""'),
+        ("the Brave Origin page", _ORIGIN_ROUTE, lambda m: "if(false){r.ORIGIN="),
+        ("Brave's own New Tab Page section", _NEW_TAB_SECTION, lambda m: "<settings-section hidden" + m.group(1)),
+    ):
+        hits = len(pat.findall(text))
+        if hits == 1:
+            text = pat.sub(new, text)
+            notes.append(f"{what}: hidden")
+        else:
+            notes.append(f"{what}: {'not found' if hits == 0 else f'{hits} places'}, left alone")
+    return text, notes
+
+
+# The Tor window's new tab page: while Tor connects it shows "Tor is connecting... 30%" and under it Tor's
+# own bootstrap line ("Loading networkstatus consensus"), jargon nobody can act on (critique, Nov 14
+# 2026). The percentage stays; the line under it is left empty. Found by content: the message is set
+# right after the "torStatusInitializing" text.
+_TOR_DETAIL = re.compile(r'("torStatusInitializing".{0,2500}?\bbn\(a\),l,s\),)(\w)=\w\.message,', re.S)
+
+
+def is_tor_page(body):
+    return b"torStatusInitializing" in body
+
+
+def quiet_tor(text):
+    """-> (text, [notes])."""
+    hits = len(_TOR_DETAIL.findall(text))
+    if hits != 1:
+        return text, [f"Tor's bootstrap line: {'not found' if hits == 0 else f'{hits} places'}, left alone"]
+    return _TOR_DETAIL.sub(lambda m: f'{m.group(1)}{m.group(2)}="",', text), ["Tor's bootstrap line under the progress: hidden"]
+
+
 def is_shields_panel(text):
     return "<title>Shields Panel</title>" in text and "</style>" in text
 
@@ -426,6 +483,15 @@ def run(folder, branding, name="Gamblium", locales=("en-US", "en-GB"), check=Fal
                             alone[rid] = "lion outline, but not its face"
                             continue
                         pk["res"][rid], done[rid] = patch_png(found, art)
+                    elif kind == "gzip" and rel in ("resources.pak", "brave_resources.pak") and 120_000 <= len(raw) < 4_000_000:
+                        body = P.inflate(raw)
+                        for is_it, quiet in ((is_settings_bundle, quiet_settings), (is_tor_page, quiet_tor)):
+                            if is_it(body):
+                                page, notes = quiet(body.decode("utf8", "replace"))
+                                report.setdefault("settings", []).extend(notes)
+                                if any(n.endswith(": hidden") for n in notes):
+                                    pk["res"][rid] = gzip.compress(page.encode("utf8"), mtime=0)
+                                break
                     elif kind == "gzip" and len(raw) < 120_000:
                         body = P.inflate(raw)
                         if P.kind(body) != "svg":
@@ -488,6 +554,8 @@ def run(folder, branding, name="Gamblium", locales=("en-US", "en-GB"), check=Fal
     log(f"{images_done} images and {strings_done} strings changed in {ver}")
     log(f"address bar: names no search engine in {len(report.get('address bar', []))} string(s)")
     log(f"wording: {len(report.get('wording', []))} string(s) in sentence case")
+    for note in report.get("settings", ["settings page: its bundle was not found; left alone"]):
+        log(f"settings: {note}")
     return OK, report
 
 

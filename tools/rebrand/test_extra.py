@@ -332,9 +332,17 @@ class SettingsWithVersion(unittest.TestCase):
         again, said = X.settings_script(new, DIAMOND, "0.7.1")
         self.assertEqual(again, new)
 
+    def test_a_beta_version_keeps_its_spaces(self):
+        new, _ = X.settings_script(self.PAGE, DIAMOND, "1.0.0 beta 2")
+        self.assertIn(b"Gamblium 1.0.0 beta 2</span>", new)
+        self.assertIn(b">Gamblium 1.0.0 beta 2</div>", new)
+        # Only harmless characters reach the page.
+        new, _ = X.settings_script(self.PAGE, DIAMOND, '1.0 <b>"x"</b>')
+        self.assertIn(b"Gamblium 1.0 bxb</span>", new)
+
     def test_the_version_comes_from_the_extension_manifest(self):
         # version_name ("1.0.0 beta") when the manifest has one, else the plain version.
-        self.assertRegex(X.gamblium_version(Path(__file__).resolve().parents[2] / "branding"), r"^\d+\.\d+\.\d+( beta)?$")
+        self.assertRegex(X.gamblium_version(Path(__file__).resolve().parents[2] / "branding"), r"^\d+\.\d+\.\d+( beta( \d+)?)?$")
         self.assertIsNone(X.gamblium_version("Z:/nowhere/branding"))
 
 

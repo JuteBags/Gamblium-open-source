@@ -10,6 +10,12 @@ let host = '';
 let allTabs = [];
 let at = 0; // which row of the list the arrow keys are on
 
+// The row pointed at (or moved to with the arrows) lights its tab in the strip; the background
+// holds the light and takes it off when the popup closes. Ctrl, Alt or the pointer leaving the
+// list take it off at once.
+const lightPort = chrome.runtime.connect({ name: 'tab-light' });
+const lightTab = (id) => { try { lightPort.postMessage({ tabId: id || 0 }); } catch { /* popup closing */ } };
+
 // The finder: this window's tabs first, the one in front left out. Type to
 // narrow, arrow keys to move, Enter to go.
 function shownTabs() {
@@ -40,6 +46,7 @@ function renderList() {
       el('span', { className: 'dot', title: stateOf(t) }),
       close,
     ]);
+    li.dataset.tab = String(t.id);
     li.setAttribute('role', 'option');
     li.setAttribute('aria-selected', String(i === at));
     li.addEventListener('click', () => goTo(t));
@@ -48,6 +55,7 @@ function renderList() {
         at = i;
         for (const [k, node] of [...$('tablist').children].entries()) node.setAttribute('aria-selected', String(k === at));
       }
+      lightTab(t.id);
     });
     return li;
   }));
@@ -469,6 +477,10 @@ $('fullScreen').addEventListener('click', async () => {
 });
 showZoom();
 
+$('tablist').addEventListener('pointerleave', () => lightTab(0));
+addEventListener('keydown', (e) => { if (e.ctrlKey || e.metaKey || e.altKey || /^(Control|Meta|Alt)$/.test(e.key)) lightTab(0); }, true);
+addEventListener('blur', () => lightTab(0));
+
 $('find').addEventListener('input', () => {
   at = 0;
   renderList();
@@ -480,6 +492,7 @@ $('find').addEventListener('keydown', (e) => {
     at = (at + (e.key === 'ArrowDown' ? 1 : -1) + rows.length) % Math.max(1, rows.length);
     renderList();
     $('tablist').children[at]?.scrollIntoView({ block: 'nearest' });
+    lightTab(rows[at]?.id);
   } else if (e.key === 'Enter' && rows[at]) {
     e.preventDefault();
     goTo(rows[at]);

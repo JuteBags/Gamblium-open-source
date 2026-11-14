@@ -253,8 +253,19 @@ pub enum Copy {
     Stale { copy: String, installed: String },
 }
 
+/// A rebrand that died between its two renames leaves the working copy as `Application.old`
+/// and no `Application`: put it back. `Application.old` is only ever deleted while
+/// `Application` is there.
+pub fn recover(copy: &Path) {
+    let old = copy.with_file_name("Application.old");
+    if !copy.exists() && old.is_dir() {
+        let _ = fs::rename(&old, copy);
+    }
+}
+
 /// What the launcher should do, given the installed Brave and the copy folder.
 pub fn state(official_exe: &Path, copy: &Path) -> Copy {
+    recover(copy);
     let exe = copy.join("brave.exe");
     // A browser that came with Gamblium, or the only browser there is.
     if copy.join(SHIPPED).is_file() || !official_exe.is_file() {
@@ -296,6 +307,69 @@ pub fn copy_all(from: &Path, to: &Path) -> std::io::Result<(usize, u64)> {
     Ok((files, bytes))
 }
 
+/// What the copy was made from: the patchers, the branding and the extension's manifest (its
+/// version shows in Settings). A copy whose stamp differs is out of date. (Owner, Nov 14 2026:
+/// the rebrand must happen by itself; nobody should have to think of running it.)
+const STAMP: &str = "gamblium-rebrand-stamp";
+
+pub fn inputs_stamp(home: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().into_owned();
+            // Only what changes the copy: not caches, notes or dot-folders (a checkout has
+            // README.md and .pytest_cache, the installed folder may not).
+            if name.starts_with('.') || name == "__pycache__" || name.ends_with(".md") || name.ends_with(".pyc") {
+                continue;
+            }
+            if p.is_dir() {
+                walk(&p, out);
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&home.join("tools").join("rebrand"), &mut files);
+    walk(&home.join("branding"), &mut files);
+    files.push(home.join("extension").join("manifest.json"));
+    files.sort();
+    let mut h = Sha256::new();
+    for f in files {
+        h.update(f.strip_prefix(home).unwrap_or(&f).to_string_lossy().replace('\\', "/").as_bytes());
+        h.update(fs::read(&f).unwrap_or_default());
+    }
+    h.finalize().iter().take(12).map(|b| format!("{b:02x}")).collect()
+}
+
+/// The copy should be made again: missing, made for another Brave, or from other inputs. A copy
+/// that came inside the package was made when the package was built and is left alone.
+pub fn needs_refresh(official_exe: &Path, home: &Path) -> bool {
+    let Some(copy) = copy_dir() else { return false };
+    recover(&copy);
+    if copy.join(SHIPPED).is_file() || !official_exe.is_file() || wants_official() {
+        return false;
+    }
+    match state(official_exe, &copy) {
+        Copy::Fresh(_) => fs::read_to_string(copy.join(STAMP)).map(|s| s.trim() != inputs_stamp(home)).unwrap_or(true),
+        _ => true,
+    }
+}
+
+/// Refreshes the copy when it needs it, saying what happened in one line (None: nothing to do).
+/// A copy in use is left for the next start, when nothing runs from it.
+pub fn refresh_if_needed(official_exe: &Path, home: &Path) -> Option<String> {
+    if !needs_refresh(official_exe, home) {
+        return None;
+    }
+    Some(match make(official_exe, home, false) {
+        Ok(_) => "rebrand: the copy was made again (its inputs changed)".to_owned(),
+        Err(e) if e.contains("in use") => "rebrand: the copy is in use; it is refreshed at the next start".to_owned(),
+        Err(e) => format!("rebrand: could not refresh the copy ({e})"),
+    })
+}
+
 /// Makes or refreshes the copy and patches it. `home` holds `tools/rebrand/`
 /// and `branding/`. Returns lines to show.
 pub fn make(official_exe: &Path, home: &Path, dry_run: bool) -> Result<Vec<String>, String> {
@@ -312,23 +386,40 @@ pub fn make(official_exe: &Path, home: &Path, dry_run: bool) -> Result<Vec<Strin
         log.push("would copy Brave's program folder (about 1 GB) and put Gamblium's mark and name into the copy".into());
         return Ok(log);
     }
+    // The new copy is built and patched beside the old one and swapped in at the end, so a
+    // browser still running from the old copy never loses files under it (Nov 14 2026: deleting
+    // in place removed ten files, then stopped at chrome.dll, which a running browser held).
+    // Windows refuses to rename a folder while a program runs from it: that is the check, made
+    // once before the work and again at the swap.
+    let staging = dest.with_file_name("Application.new");
+    let old = dest.with_file_name("Application.old");
+    recover(&dest);
+    let _ = fs::remove_dir_all(&staging);
     if dest.exists() {
-        fs::remove_dir_all(&dest).map_err(|e| format!("could not replace the old copy: {e} (close every Gamblium window first)"))?;
+        let _ = fs::remove_dir_all(&old);
     }
-    let (files, bytes) = copy_all(application, &dest).map_err(|e| format!("copy failed: {e}"))?;
+    let busy = |e: std::io::Error| format!("the copy is in use, nothing was changed ({e}). Close every Gamblium window, including test and hidden ones, and run `gamblium rebrand` again");
+    if dest.exists() {
+        fs::rename(&dest, &old).map_err(busy)?;
+        fs::rename(&old, &dest).map_err(|e| format!("could not put the copy back from {}: {e}", old.display()))?;
+    }
+    let (files, bytes) = copy_all(application, &staging).map_err(|e| {
+        let _ = fs::remove_dir_all(&staging);
+        format!("copy failed: {e}")
+    })?;
     log.push(format!("copied {files} files, {} MB", bytes / (1024 * 1024)));
 
     let run = Command::new("python")
         .arg(&script)
-        .arg(&dest)
+        .arg(&staging)
         .arg("--branding")
         .arg(&branding)
         .arg("--json")
         .output()
         .map_err(|e| format!("could not run python ({e}). The patcher needs Python 3.10+ with Pillow"))?;
     if !run.status.success() {
-        // An unpatched copy must never be used: remove it.
-        let _ = fs::remove_dir_all(&dest);
+        // An unpatched copy must never be used: remove it; the old copy stays as it was.
+        let _ = fs::remove_dir_all(&staging);
         let why = match run.status.code() {
             Some(2) => "the patcher refused the folder or its inputs",
             Some(3) => "Brave's artwork has changed and the lion was not found; the patcher needs updating",
@@ -357,7 +448,7 @@ pub fn make(official_exe: &Path, home: &Path, dry_run: bool) -> Result<Vec<Strin
             if attempt > 0 {
                 std::thread::sleep(std::time::Duration::from_secs(15));
             }
-            match Command::new("python").arg(&extra).arg(&dest).arg("--branding").arg(&branding).arg("--json").output() {
+            match Command::new("python").arg(&extra).arg(&staging).arg("--branding").arg(&branding).arg("--json").output() {
                 Ok(run) if run.status.success() => {
                     let report: serde_json::Value = serde_json::from_slice(&run.stdout).unwrap_or_default();
                     let count = |k: &str| report[k].as_array().map(|a| a.len()).unwrap_or(0);
@@ -370,12 +461,25 @@ pub fn make(official_exe: &Path, home: &Path, dry_run: bool) -> Result<Vec<Strin
             }
         }
         if !ok {
-            leftovers_away(&dest);
-            return Err(format!(
-                "chrome.dll / brave.exe of the copy could not be patched ({last}). The copy shows Brave's lion in places and Brave's new-tab question. Close every Gamblium window and run `gamblium rebrand` again."
-            ));
+            let _ = fs::remove_dir_all(&staging);
+            return Err(format!("chrome.dll / brave.exe of the new copy could not be patched ({last}); the old copy is unchanged. Run `gamblium rebrand` again."));
         }
-        leftovers_away(&dest);
+        leftovers_away(&staging);
+    }
+    let _ = fs::write(staging.join(STAMP), inputs_stamp(home));
+    if dest.exists() {
+        if let Err(e) = fs::rename(&dest, &old) {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(busy(e));
+        }
+    }
+    if let Err(e) = fs::rename(&staging, &dest) {
+        let _ = fs::rename(&old, &dest);
+        let _ = fs::remove_dir_all(&staging);
+        return Err(format!("could not move the new copy into place ({e}); the old copy is back"));
+    }
+    if dest.exists() {
+        let _ = fs::remove_dir_all(&old);
     }
     let exe = dest.join("brave.exe");
     match crate::launch::ensure_gpu_preference(&exe, false) {
@@ -405,6 +509,21 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn a_copy_left_as_application_old_is_put_back() {
+        let root = folder("recover");
+        let copy = root.join("Application");
+        fs::create_dir_all(root.join("Application.old")).unwrap();
+        fs::write(root.join("Application.old").join("brave.exe"), "exe").unwrap();
+        recover(&copy);
+        assert!(copy.join("brave.exe").is_file() && !root.join("Application.old").exists());
+        // With a copy in place, an Application.old is left for make() to delete, never moved over it.
+        fs::create_dir_all(root.join("Application.old")).unwrap();
+        recover(&copy);
+        assert!(copy.join("brave.exe").is_file() && root.join("Application.old").is_dir());
+        let _ = fs::remove_dir_all(&root);
     }
 
     fn fake_brave(root: &Path, version: &str, patched: bool) -> PathBuf {

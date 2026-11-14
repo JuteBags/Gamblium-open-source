@@ -1,3 +1,4 @@
+@import url("controls.css");
 /* Shared look of Gamblium's own pages: tabs and memory, sessions, downloads,
    security, settings, popup.
    Flat on near-black (or paper, in light mode): one ground for the sidebar and
@@ -404,14 +405,20 @@ body::before {
    - secondary (plain and .quiet): a 7% ink tint and the rim; 12% on hover; 18% pressed
    - primary: the filled ink pill; darker pressed
    - danger: the bad tint, for Remove, Close, Clear and choices that open a door (Always allow) */
-button, button.quiet { background: color-mix(in srgb, var(--text) 7%, transparent); border-color: var(--rim); }
+/* The colours come from controls.css (the accent system shared with New Tab and the welcome page). */
+button, button.quiet { background: var(--ctl-fill); border-color: var(--ctl-rim); }
 button.quiet { padding: 0 10px; }
-button:where(:hover), button.quiet:where(:hover) { background: color-mix(in srgb, var(--text) 12%, transparent); }
-button:where(:active), button.quiet:where(:active) { background: color-mix(in srgb, var(--text) 18%, transparent); transform: translateY(1px); }
-button.primary:where(:active) { background: color-mix(in srgb, var(--text) 74%, var(--bg)); transform: translateY(1px); }
-button.danger:where(:active) { background: color-mix(in srgb, var(--bad-bg) 62%, var(--bad-ink)); transform: translateY(1px); }
+button:where(:hover), button.quiet:where(:hover) { background: var(--ctl-fill-hover); }
+button:where(:active), button.quiet:where(:active) { background: var(--ctl-fill-press); transform: var(--ctl-press-shift); }
+button.primary:where(:hover) { background: var(--ctl-primary-hover); }
+button.primary:where(:active) { background: var(--ctl-primary-press); transform: var(--ctl-press-shift); }
+button.danger { background: var(--ctl-danger); color: var(--ctl-danger-ink); }
+button.danger:where(:hover) { background: var(--ctl-danger-hover); }
+button.danger:where(:active) { background: var(--ctl-danger-press); transform: var(--ctl-press-shift); }
+button.good, .updrow button.good { border-color: transparent; background: var(--ctl-good); color: var(--ctl-good-ink); font-weight: 600; }
+button.good:where(:hover), .updrow button.good:hover { background: var(--ctl-good-hover); }
 button:disabled { transform: none; }
-button.primary { background: var(--text); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5), 0 6px 22px -8px color-mix(in srgb, var(--text) 55%, transparent); }
+button.primary { background: var(--ctl-primary); color: var(--ctl-primary-ink); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5), 0 6px 22px -8px color-mix(in srgb, var(--text) 55%, transparent); }
 input[type="text"], input[type="search"], input[type="number"], select, textarea { background: color-mix(in srgb, var(--bg) 55%, transparent); border-color: var(--rim); }
 pre.code { background: color-mix(in srgb, var(--bg) 60%, transparent); box-shadow: inset 0 0 0 1px var(--rim); }
 .blocks { box-shadow: var(--shine); padding: 3px; gap: 3px; background: var(--card); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); height: 70px; }
@@ -812,8 +819,7 @@ button.stab .thost { overflow: hidden; text-overflow: ellipsis; white-space: now
 .stools { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .stools .grow { flex: 1; }
 .stools .check { margin: 0; font-size: 13px; }
-button.danger { height: 28px; padding: 0 10px; border-color: transparent; background: var(--bad-bg); color: var(--bad-ink); }
-button.danger:hover { background: color-mix(in srgb, var(--bad-bg) 80%, var(--bad-ink)); }
+button.danger { height: 28px; padding: 0 10px; border-color: transparent; background: var(--ctl-danger); color: var(--ctl-danger-ink); }
 
 .empty.blank { padding: 28px 20px; text-align: center; }
 .empty.blank p { margin: 0 auto; max-width: 46ch; }
@@ -1170,5 +1176,11 @@ details.testers .grid { gap: 24px; }
 /* Settings, This profile: the updates line. Real buttons (owner: buttons that look like buttons); Restart in the good tint. */
 .updrow { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
 .updrow button { height: 30px; padding: 0 14px; border-radius: 999px; font-size: 13px; }
-.updrow button.good { border-color: transparent; color: var(--ok-ink); background: var(--ok-bg); font-weight: 600; }
-.updrow button.good:hover { background: color-mix(in srgb, var(--ok-ink) 22%, var(--ok-bg)); }
+/* Tabs and memory: the tab pointed at, lit in the page as it is in the strip (#225): its row and its
+   memory block together, in the facet light. */
+table.tabs tbody tr.lit td { background: color-mix(in srgb, var(--highlight) 9%, transparent); }
+table.tabs tbody tr.lit td:first-child { box-shadow: inset 2px 0 0 var(--highlight); }
+table.tabs tbody tr.lit td.actions button { opacity: 1; }
+.blocks .block.lit { filter: brightness(1.12) saturate(1.15); box-shadow: inset 0 0 0 2px var(--highlight); }
+/* Tabs and memory, Tab groups card: a group's name with its tab-strip colour, as in Recently closed (#223). */
+.gdot::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 8px; border-radius: 50%; vertical-align: -1px; background: var(--group, #9aa0a6); box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 25%, transparent); }
