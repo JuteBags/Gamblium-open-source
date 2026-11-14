@@ -5,8 +5,9 @@ export const DEFAULTS = {
   // Seconds a tab must stay hidden before it is put to sleep (discarded: its
   // memory is freed and it reloads when opened). The launcher already freezes
   // hidden tabs after 30 s, which stops their CPU use and resumes instantly, so
-  // sleeping can wait: it is there to give memory back.
-  delaySec: 600,
+  // sleeping can wait: it is there to give memory back. Owner, Nov 14 2026: frozen at 30 s,
+  // trimmed at 5 min, asleep at 30 min ("keep this tab awake" is the way out of all three).
+  delaySec: 1800,
   // When the machine is short on memory, sleep hidden tabs much sooner.
   lowMemoryDelaySec: 60,
   // "Short on memory" = less than this much RAM available, in MB.
@@ -29,8 +30,10 @@ export const DEFAULTS = {
   // long, the memory of its page process is moved out of RAM (it stays the
   // tab's, on disk, and comes back as the page touches it when shown).
   // Measured, 9 tabs: 1200 MB frozen, 398 MB just after, 512 MB a minute later.
+  // Owner, Nov 14 2026: always, whatever the free memory, 5 minutes after the tab was hidden
+  // (frozen at 30 s + 270 s). By then pages have loaded, so it costs no CPU while they load.
   trimEnabled: true,
-  trimDelaySec: 60,
+  trimDelaySec: 270,
   // Hosts that are never frozen and never put to sleep: they stay ordinary
   // background tabs (dashboards, anything that must keep updating).
   awakeHosts: [],

@@ -89,7 +89,7 @@ test("a hidden tab freezes after the delay, with the exceptions the owner asked 
 });
 
 test("a tab kept awake is not put to sleep either", () => {
-  const now = 1_000_000;
+  const now = 10_000_000; // past the 30-minute sleep delay
   const t = { id: 3, url: "https://example.com/", lastAccessed: 0 };
   assert.equal(keepReason(t, DEFAULTS, now, { awakeTabs: [3] }), "kept awake");
   assert.equal(keepReason(t, { ...DEFAULTS, awakeHosts: ["example.com"] }, now), "kept awake");

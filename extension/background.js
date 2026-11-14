@@ -474,15 +474,10 @@ async function trimCheck(tabs, s, now, frozen) {
   const { trimmedTabs } = await chrome.storage.session.get({ trimmedTabs: {} });
   for (const id of Object.keys(trimmedTabs)) if (frozen[id] === undefined) delete trimmedTabs[id];
   const done = { pids: 0, tabs: Object.keys(trimmedTabs).length, note: null };
-  // Only when memory is short. Trimming every frozen tab cost 45 points of
-  // CPU while 45 tabs loaded (tester: 343% against 298% with it off), for a
-  // lower working set that Windows takes back by itself when it needs to;
-  // idle CPU and private memory were the same either way.
-  const mem = chrome.system && chrome.system.memory ? await chrome.system.memory.getInfo().catch(() => null) : null;
-  const short = mem && mem.availableCapacity / 1048576 < s.lowMemoryMb;
-  if (!short) {
-    done.note = "memory is not short";
-  } else if (trimWaiting(frozen, trimmedTabs, now, s)) {
+  // Always, whatever the free memory (owner, Nov 14 2026: the saving must not depend on how
+  // full the machine is). Trimming 1 minute after the freeze cost 45 points of CPU while 45
+  // tabs loaded (tester: 343% against 298%); at 5 minutes hidden the pages have loaded.
+  if (trimWaiting(frozen, trimmedTabs, now, s)) {
     const reading = await native({ type: "stats" });
     if (!reading || !reading.ok) {
       done.note = "the helper did not answer";
