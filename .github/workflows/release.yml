@@ -86,6 +86,8 @@ jobs:
           Write-Host "Brave is in $app"
           Get-ChildItem $app | Select-Object Name
           python -m pip install --quiet pillow numpy
+          # Strict: a chrome.dll change that finds nothing fails the build (1.0.0 shipped without two).
+          $env:GAMBLIUM_REBRAND_STRICT = "1"
           & target\release\gamblium.exe rebrand --brave "$app\brave.exe"
           if ($LASTEXITCODE -ne 0) { throw "gamblium rebrand failed" }
           $copy = "$env:LOCALAPPDATA\Gamblium\browser\Application"

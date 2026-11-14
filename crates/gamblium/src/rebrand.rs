@@ -448,7 +448,13 @@ pub fn make(official_exe: &Path, home: &Path, dry_run: bool) -> Result<Vec<Strin
             if attempt > 0 {
                 std::thread::sleep(std::time::Duration::from_secs(15));
             }
-            match Command::new("python").arg(&extra).arg(&staging).arg("--branding").arg(&branding).arg("--json").output() {
+            // GAMBLIUM_REBRAND_STRICT=1 (package builds): any chrome.dll change not made fails the run.
+            let mut cmd = Command::new("python");
+            cmd.arg(&extra).arg(&staging).arg("--branding").arg(&branding).arg("--json");
+            if std::env::var_os("GAMBLIUM_REBRAND_STRICT").is_some() {
+                cmd.arg("--strict");
+            }
+            match cmd.output() {
                 Ok(run) if run.status.success() => {
                     let report: serde_json::Value = serde_json::from_slice(&run.stdout).unwrap_or_default();
                     let count = |k: &str| report[k].as_array().map(|a| a.len()).unwrap_or(0);

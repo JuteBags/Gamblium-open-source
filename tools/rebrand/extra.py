@@ -1325,6 +1325,10 @@ def main(argv=None):
     ap.add_argument("--branding", default=str(Path(__file__).resolve().parents[2] / "branding"))
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--json", action="store_true")
+    # For packages (release builds): every chrome.dll change must have been made, or the run fails.
+    # A package built on another Brave once shipped with Brave's menu showing and our button in the
+    # wrong place, because two changes found nothing and were left out quietly (Nov 14 2026).
+    ap.add_argument("--strict", action="store_true")
     a = ap.parse_args(argv)
     log = (lambda *x: print(*x, file=sys.stderr)) if a.json else print
     try:
@@ -1334,7 +1338,24 @@ def main(argv=None):
         return 2
     if a.json:
         print(json.dumps(report))
+    if a.strict and code == 0:
+        missed = strict_misses(report)
+        if missed:
+            for m in missed:
+                print(f"strict: not done: {m}", file=sys.stderr)
+            return 4
     return code
+
+
+def strict_misses(report):
+    """The chrome.dll changes a package must have, that this run did not make."""
+    missed = [n for n in report.get("menu button", []) if "left alone" in n or "not hidden" in n]
+    q = report.get("question", "")
+    if q and "silenced at" not in q:
+        missed.append(q)
+    if not any(": our mark" in n for n in report.get("vector", [])):
+        missed.append("toolbar lion drawings: none replaced")
+    return missed
 
 
 if __name__ == "__main__":

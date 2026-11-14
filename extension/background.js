@@ -1385,7 +1385,7 @@ async function sessionImport({ session }) {
 
 const NATIVE_HOST = "com.gamblium.host";
 const NATIVE_TYPES = new Set([
-  "ping", "stats", "freeze", "thaw", "trim", "lift-extension", "brand-get", "brand-set", "restart", "dl-start", "dl-list", "dl-cancel", "dl-resume", "dl-forget", "dl-action", "open-folder", "open-tor", "update-check", "update-status", "update-restart", "capture-window", "capture-piece", "seal", "open", "named-sessions", "permit-check", "permit-get", "permit-set", "scope-list", "scope-add", "scope-check", "audit", "scan", "cve",
+  "ping", "stats", "freeze", "thaw", "trim", "lift-extension", "brand-get", "brand-set", "restart", "dl-start", "dl-list", "dl-cancel", "dl-resume", "dl-forget", "dl-action", "open-folder", "open-tor", "welcome-done", "update-check", "update-status", "update-restart", "capture-window", "capture-piece", "seal", "open", "named-sessions", "permit-check", "permit-get", "permit-set", "scope-list", "scope-add", "scope-check", "audit", "scan", "cve",
 ]);
 
 async function native(request) {
@@ -1436,18 +1436,26 @@ native({ type: "lift-extension" });
 // A profile that has not been through the welcome page gets it once, in a tab.
 // The page sets chrome.storage.local "onboarded" when the user finishes or skips.
 async function welcomeOnce() {
-  if (IS_AGENT_BUILD) return;
-  const { onboarded, welcomeShown } = await chrome.storage.local.get({ onboarded: false, welcomeShown: false });
-  if (onboarded || welcomeShown) return;
+  // Not in a browser with no window: the launcher's one-time hidden start (private-window access)
+  // is a full start of the profile, and the welcome "shown" there was never seen (owner, 1.0.0:
+  // a fresh install had no onboarding). `welcomeSeen` replaces `welcomeShown`, which that hidden
+  // start set, so profiles it caught get the welcome once.
+  if (IS_AGENT_BUILD || NO_WINDOW) return;
   // A test window, an agent's or a pen-test profile (the launcher says so):
   // no welcome page in front. Nothing is marked, so a normal start later
   // still shows it.
   const ping = await native({ type: "ping" });
   if (ping && ping.welcome === false) return;
+  // Gamblium installed anew (not updated): the welcome shows again, even in a profile that went
+  // through it before (owner, Nov 14 2026).
+  const fresh = !!(ping && ping.newInstall);
+  const { onboarded, welcomeSeen } = await chrome.storage.local.get({ onboarded: false, welcomeSeen: false });
+  if (!fresh && (onboarded || welcomeSeen)) return;
   const url = chrome.runtime.getURL("ui/welcome.html");
   // The page ships with the design session's work; without it there is nothing to show.
   if (!(await fetch(url).then((r) => r.ok, () => false))) return;
-  await chrome.storage.local.set({ welcomeShown: true });
+  await chrome.storage.local.set({ welcomeSeen: true });
+  if (fresh) native({ type: "welcome-done" });
   // Opened inside the new tab page, so the address bar stays clean.
   chrome.tabs.create({ url: "chrome://newtab/#/welcome" });
 }

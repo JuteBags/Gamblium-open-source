@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gamblium",
-  "version": "1.0.0",
+  "version": "1.0.5",
   "description": "Freezes hidden tabs, takes over big downloads (it reads site cookies for logged-in ones) and adds Gamblium's menu and pages.",
   "minimum_chrome_version": "121",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0x2Cz7HfiLPvwpDY9GZKup3e4eegFF7aaZ1e+iwsNN/28vedEn89Wa5dBuN4Zf84sg8XKLWrBX5wUzZaAj3I5d3yi8eKkk7r7pN8fJY/y2m+eJIArgSpLo8gC58puGtLckZF0b9segpY0Ru6YHka1YucnonO9So01Qd20tT7WcOATW005GjyCFfK6u5xE1N8D0uCsYbDhoId4+t2r/qkhowBJYV8dYP5KMFcn+QVR0e9Cnph53DzuPCPU4qNNvc58L+RVn4FCDqDQT4JRRcqoN12gaZdrHgxQIfGpM9ISFj9uXdjk0dMmeFM8DbDqfBqsgVR3Dyay3bT4d4Sb8/6rQIDAQAB",

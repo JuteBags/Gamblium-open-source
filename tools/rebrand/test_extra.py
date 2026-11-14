@@ -433,5 +433,22 @@ class GoogleBlue(unittest.TestCase):
         self.assertIn("already ours", notes2[0])
 
 
+class Strict(unittest.TestCase):
+    """Package builds fail when a chrome.dll change was left out (1.0.0 shipped without two)."""
+
+    def test_a_complete_run_passes(self):
+        report = {"menu button": ["menu button: hidden (handler at 0x10)", "extensions button: first in the extensions area (at 0x20)"],
+                  "question": "new-tab question: silenced at 0x30", "vector": ["24-unit lion at 0x40: our mark"]}
+        self.assertEqual(X.strict_misses(report), [])
+
+    def test_each_missing_change_is_named(self):
+        report = {"menu button": ["menu button: not hidden (handler 0, SetVisible 1 found; a different Brave); left alone",
+                                  "extensions button: order not changed (0 places found; a different Brave); left alone"],
+                  "question": "new-tab question: the setting's name was not found exactly once; left alone", "vector": []}
+        missed = X.strict_misses(report)
+        self.assertEqual(len(missed), 4)
+        self.assertTrue(any("menu button" in m for m in missed) and any("extensions button" in m for m in missed))
+
+
 if __name__ == "__main__":
     unittest.main()

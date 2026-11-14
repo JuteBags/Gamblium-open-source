@@ -59,6 +59,10 @@ enum Cmd {
         /// Uninstall instead. Your Gamblium profile is kept.
         #[arg(long)]
         remove: bool,
+        /// A new install, not an update (the installer says so): the welcome page shows at the
+        /// next start, even in a profile that has been through it before.
+        #[arg(long)]
+        new: bool,
         /// Show what would happen without doing it.
         #[arg(long)]
         dry_run: bool,
@@ -435,7 +439,7 @@ fn main() {
                 _ => launch::spawn_detached(&me.with_file_name("gamblium-app.exe"), &[]),
             };
         }
-        Cmd::Install { remove, dry_run } => {
+        Cmd::Install { remove, new, dry_run } => {
             let result = if remove {
                 install::remove(dry_run)
             } else {
@@ -443,6 +447,25 @@ fn main() {
                     .ok_or("cannot find the Gamblium folder (extension/, presets/). Set GAMBLIUM_HOME".to_string())
                     .and_then(|home| install::install(&home, dry_run))
                     .map(|mut lines| {
+                        if !dry_run {
+                            // Windows keeps a program's name per path (MuiCache) and shows the
+                            // old one in Task Manager after an update: a friend's install read
+                            // "Brave" for a while. Drop the cached name; Windows reads it again.
+                            if let Some(exe) = rebrand::copy_dir().map(|d| d.join("brave.exe")) {
+                                let key = r"HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache";
+                                for v in ["FriendlyAppName", "ApplicationCompany"] {
+                                    let _ = std::process::Command::new("reg").args(["delete", key, "/v", &format!("{}.{v}", exe.display()), "/f"]).output();
+                                }
+                            }
+                        }
+                        if new && !dry_run {
+                            if let Some(profile) = install::profile_dir() {
+                                let _ = std::fs::create_dir_all(&profile);
+                                if std::fs::write(profile.join(host::WELCOME_AGAIN), "").is_ok() {
+                                    lines.push("new install: the welcome page shows at the next start".into());
+                                }
+                            }
+                        }
                         // The installed patchers may be newer than the copy: make it again now
                         // (or at the next start, if a Gamblium runs from it).
                         let app = std::env::var_os("LOCALAPPDATA").map(|d| std::path::PathBuf::from(d).join("Gamblium").join("app"));
@@ -1251,6 +1274,16 @@ fn run_launch(mut a: LaunchArgs) -> Result<(), String> {
             // Translation off once for profiles made before it was the default (#231; owner's yes,
             // Nov 14 2026): no "Translate this page?" bubble popping up by itself. Once only, so a
             // person who turns it back on keeps it.
+            // The bookmarks bar off once (owner, Nov 14 2026: a whole row for one tab-groups
+            // button). 1 = never shown. Once only: someone who turns it back on keeps it.
+            let bar = prefs_dir.join("gamblium-bookmark-bar-off");
+            if !dry_run && !bar.exists() {
+                let mut off = serde_json::Map::new();
+                off.insert("bookmark_bar.visibility_state".into(), serde_json::json!(1));
+                launch::apply_preferences(&prefs_dir, profile, &off, false).map_err(|e| format!("Preferences: {e}"))?;
+                let _ = std::fs::write(&bar, "");
+                println!("profile prefs changed ({profile}): bookmarks bar hidden (once)");
+            }
             let marker = prefs_dir.join("gamblium-translate-off");
             if !dry_run && !marker.exists() {
                 let mut off = serde_json::Map::new();
@@ -1274,8 +1307,15 @@ fn run_launch(mut a: LaunchArgs) -> Result<(), String> {
             Err(e) => println!("GPU preference: could not set ({e})"),
         }
     }
-    let args =
+    let mut args =
         launch::build_args(custom_dir.as_deref(), profile_directory.as_deref(), debug_port, &preset, &extra);
+    // A new profile's first window fills the screen (owner, Nov 14 2026: it opened small). The
+    // browser remembers the size afterwards, so later starts are the person's own choice. Not for
+    // test, agent, pen-test or hidden starts.
+    let first_window = new_folder || prefs_dir.join(host::WELCOME_AGAIN).is_file(); // a new profile, or a new install over a kept one
+    if first_window && !a.hidden && !a.agent && !a.pentest && debug_port.is_none() && !a.skip_welcome {
+        args.push("--start-maximized".into());
+    }
     println!("command: \"{}\" {}", brave.display(), args.join(" "));
     if dry_run {
         return Ok(());

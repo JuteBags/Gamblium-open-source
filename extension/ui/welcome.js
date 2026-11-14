@@ -161,11 +161,11 @@ for (const r of document.querySelectorAll('input[name="clock"]')) {
 // ---- the screens
 
 const SCREENS = {
-  name: { title: 'What should I call you?', line: 'Only to greet you on new tabs. Your name stays on this computer.', later: true },
+  name: { title: 'What should I call you?', line: 'Only to greet you on new tabs. Your name stays on this computer.' },
   look: { title: 'Pick your light.', line: 'Try both. The whole page changes as you choose.' },
   night: { title: 'Should white websites go dark too?', line: 'Some sites only come in white. Gamblium can darken them for you.' },
   search: { title: 'Pick your search.', line: 'Used by the search box on every new tab.' },
-  sites: { title: 'Choose the sites you use most.', line: 'They become tiles on your new tab, one click away.', later: true },
+  sites: { title: 'Choose the sites you use most.', line: 'They become tiles on your new tab, one click away.' },
   import: { title: 'Bring your things?', line: 'Bookmarks, history and saved passwords can come over from Chrome, Edge or Firefox.' },
   newtab: { title: 'Set up your new tab.', line: 'Pick what you want to see each time. Change it any time from the square at the bottom right of a new tab.' },
   done: { title: 'Ready.', line: 'The window\'s frame and tabs take the new look the next time Gamblium starts.', next: 'Open a new tab' },
@@ -188,9 +188,7 @@ function show(id) {
   $('title').textContent = id === 'done' && prefs.name ? `Ready, ${prefs.name}.` : s.title;
   $('line').textContent = s.line;
   $('next').textContent = s.next ?? 'Next';
-  $('later').hidden = !s.later;
   $('back').disabled = order()[0] === id;
-  $('skip').hidden = id === 'done';
   $('said').textContent = '';
   if (id === 'done') paintSummary();
   paintDots();
@@ -231,7 +229,6 @@ async function forward() {
   show(ids[ids.indexOf(at) + 1]);
 }
 $('next').addEventListener('click', forward);
-$('later').addEventListener('click', forward);
 $('back').addEventListener('click', () => {
   const ids = order();
   show(ids[Math.max(0, ids.indexOf(at) - 1)]);
@@ -239,7 +236,6 @@ $('back').addEventListener('click', () => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && e.target.id === 'name') forward();
 });
-$('skip').addEventListener('click', finish);
 $('restart').addEventListener('click', async () => {
   await done();
   const r = await helper({ type: 'restart' });

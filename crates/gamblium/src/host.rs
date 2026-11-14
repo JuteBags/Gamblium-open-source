@@ -75,6 +75,10 @@ pub fn install(extension_id: &str, remove: bool) -> Result<String, String> {
     Ok(format!("native host registered for extension {extension_id}\n  manifest: {}\n  program:  {}", manifest.display(), exe.display()))
 }
 
+/// Left in Gamblium's own profile folder by `gamblium install --new` (a new install, not an
+/// update): the extension shows the welcome page once more, then asks for it to be removed.
+pub const WELCOME_AGAIN: &str = "gamblium-welcome-again";
+
 /// Browsers refuse messages from a host above 1 MB.
 const MAX_REPLY: usize = 1024 * 1024;
 /// And they never send more than 4 GB; we accept far less, but enough for a whole-page picture:
@@ -167,7 +171,16 @@ pub fn handle(req: &Value, browser_pid: Option<u32>) -> Result<Value, String> {
             // Brave's own version, from the "Last Version" file the browser keeps in
             // the profile folder ("157.1.99.57" -> "1.99.57"), for Settings' version line.
             let brave_version = folder.as_ref().and_then(|d| std::fs::read_to_string(d.join("Last Version")).ok()).and_then(|t| brave_version_of(&t));
-            Ok(json!({ "version": env!("CARGO_PKG_VERSION"), "browserPid": browser_pid, "userDataDir": dir, "theme": theme, "freeze": freeze, "welcome": welcome, "pentest": pentest, "braveVersion": brave_version }))
+            // Installed anew (not updated): the welcome page shows again, once (owner, Nov 14 2026).
+            let new_install = folder.as_ref().is_some_and(|d| d.join(WELCOME_AGAIN).is_file());
+            Ok(json!({ "version": env!("CARGO_PKG_VERSION"), "browserPid": browser_pid, "userDataDir": dir, "theme": theme, "freeze": freeze, "welcome": welcome, "pentest": pentest, "braveVersion": brave_version, "newInstall": new_install }))
+        }
+        // The welcome page was opened for a new install: forget the request.
+        "welcome-done" => {
+            if let Some(folder) = profile_of(browser_pid).map(std::path::PathBuf::from) {
+                let _ = std::fs::remove_file(folder.join(WELCOME_AGAIN));
+            }
+            Ok(json!({ "done": true }))
         }
         // Shows this browser's own profile folder in Explorer. Only that folder:
         // a page cannot pass a path.
