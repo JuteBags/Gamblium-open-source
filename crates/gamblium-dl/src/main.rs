@@ -9,6 +9,7 @@
 //! Normal links are split over connections (http.rs); magnet links and
 //! .torrent files go to the torrent engine (torrent.rs).
 
+mod fastconnect;
 mod http;
 mod plan;
 mod status;
@@ -34,7 +35,8 @@ struct Args {
     #[arg(short = 'x', long, default_value_t = 16)]
     max_connections: usize,
     /// Connections to open straight away. The count still grows or shrinks
-    /// from there. Gamblium's helper asks for 4 on files it knows are big.
+    /// from there. Without it, the count this server's last download came to
+    /// rest at (Gamblium\downloads\servers.json), else one.
     #[arg(long, default_value_t = 1)]
     start_connections: usize,
     /// Extra request header, "Name: value". May be repeated (cookies, referer).
@@ -65,19 +67,45 @@ struct Args {
     quiet: bool,
 }
 
+/// `{"host": "a=1; b=2", ...}`, or one plain cookie header for `first`'s host.
+fn cookies_from(text: &str, first: &str) -> Vec<(String, String)> {
+    if text.trim_start().starts_with('{') {
+        let map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(text).unwrap_or_default();
+        return map.into_iter().filter_map(|(h, c)| Some((h.to_ascii_lowercase(), c.as_str().filter(|c| !c.is_empty())?.to_owned()))).collect();
+    }
+    let host = url::Url::parse(first).ok().and_then(|u| u.host_str().map(str::to_owned)).unwrap_or_default();
+    if text.is_empty() || host.is_empty() {
+        return Vec::new();
+    }
+    vec![(host, text.to_owned())]
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cookies_are_kept_per_host() {
+        let c = super::cookies_from(r#"{"github.com":"s=1","Objects.Example.org":"t=2","x.org":""}"#, "https://github.com/a");
+        assert!(c.contains(&("github.com".into(), "s=1".into())));
+        assert!(c.contains(&("objects.example.org".into(), "t=2".into())));
+        assert_eq!(c.len(), 2);
+        assert_eq!(super::cookies_from("s=1", "https://drive.example.com/f"), vec![("drive.example.com".to_string(), "s=1".to_string())]);
+        assert!(super::cookies_from("", "https://x.org/").is_empty());
+    }
+}
+
 fn main() {
     let a = Args::parse();
     if let Some(file) = a.status_file.clone() {
         status::init(file);
     }
     let mut headers = Vec::new();
-    // A login cookie comes in through the environment, so it never shows on a
-    // command line, and is taken out again at once.
-    if let Ok(cookie) = std::env::var("GAMBLIUM_DL_COOKIE") {
+    // Login cookies come in through the environment, so they never show on a
+    // command line, and are taken out again at once: a JSON object of host ->
+    // cookie header, or one plain header for the host of the first address.
+    let mut cookies: Vec<(String, String)> = Vec::new();
+    if let Ok(text) = std::env::var("GAMBLIUM_DL_COOKIE") {
         std::env::remove_var("GAMBLIUM_DL_COOKIE");
-        if !cookie.is_empty() {
-            headers.push(("Cookie".to_owned(), cookie));
-        }
+        cookies = cookies_from(&text, a.urls.first().map(String::as_str).unwrap_or(""));
     }
     for h in &a.headers {
         match h.split_once(':') {
@@ -100,7 +128,12 @@ fn main() {
             std::process::exit(2);
         }
     }
-    let o = http::Options { urls: a.urls, out: a.out, dir: a.dir, max_connections: a.max_connections.clamp(1, 32), headers, json: a.json, quiet: a.quiet, status_details: a.status_file.is_some(), start_connections: a.start_connections.clamp(1, 16), too_slow: None, give_up_after: std::time::Duration::from_secs(a.give_up_after.max(1)) };
+    // A Cookie given with -H belongs to the first address's host, like the environment's.
+    if let Some(i) = headers.iter().position(|(k, _): &(String, String)| k.eq_ignore_ascii_case("cookie")) {
+        let (_, c) = headers.remove(i);
+        cookies.extend(cookies_from(&c, a.urls.first().map(String::as_str).unwrap_or("")));
+    }
+    let o = http::Options { urls: a.urls, out: a.out, dir: a.dir, max_connections: a.max_connections.clamp(1, 32), headers, cookies, json: a.json, quiet: a.quiet, status_details: a.status_file.is_some(), start_connections: a.start_connections.clamp(1, 16), too_slow: None, give_up_after: std::time::Duration::from_secs(a.give_up_after.max(1)) };
     let seed_minutes = a.seed_minutes.min(24 * 60);
     let result = if as_torrent { torrent::download(&o, seed_minutes, !a.no_web_seed) } else { http::download(&o) };
     match result {

@@ -10,7 +10,51 @@
 //!   User Data\              Gamblium's own browser profile (not Brave's)
 
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
+
+/// The file in the extension that names its code (`export const CODE_STAMP = "...";`).
+pub const CODE_STAMP_FILE: &str = "code-stamp.js";
+
+/// Writes a fingerprint of the installed extension's files into its code-stamp.js.
+///
+/// The browser keeps an extension's background code from a profile's first start and runs that
+/// copy ever after: new files, a new version number and restarts do not replace it (measured:
+/// files A, B, C over four starts ran A, A, B, B; the owner's profile ran 1.0.0-era code under
+/// 1.0.5, Nov 14 2026). The background code compares the stamp it was built with against the
+/// file on disk and, when they differ, asks the browser to reload the extension once, which
+/// registers the code on disk (checked: the next start ran the new code). The repository's own
+/// copy says "dev" and never asks.
+pub fn write_code_stamp(ext: &Path) -> io::Result<String> {
+    use sha2::{Digest, Sha256};
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(ext, &mut files);
+    files.retain(|f| f.file_name().is_none_or(|n| n != CODE_STAMP_FILE));
+    files.sort();
+    let mut h = Sha256::new();
+    for f in &files {
+        h.update(f.strip_prefix(ext).unwrap_or(f).to_string_lossy().as_bytes());
+        h.update([0]);
+        h.update(fs::read(f)?);
+    }
+    let stamp: String = h.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect();
+    fs::write(
+        ext.join(CODE_STAMP_FILE),
+        format!("// Written by `gamblium install`: a fingerprint of this extension's files (install.rs, write_code_stamp).\nexport const CODE_STAMP = \"{stamp}\";\n"),
+    )?;
+    Ok(stamp)
+}
 use std::process::Command;
 
 pub fn base_dir() -> Option<PathBuf> {
@@ -148,6 +192,9 @@ pub fn install(home: &Path, dry_run: bool) -> Result<Vec<String>, String> {
                 fs::remove_dir_all(&to).map_err(io)?;
             }
             log.push(format!("copied {dir}\\ ({} files)", copy_tree(&from, &to).map_err(io)?));
+            if dir == "extension" {
+                write_code_stamp(&to).map_err(io)?;
+            }
         }
     }
     // The browser that came inside the package becomes Gamblium's own.
@@ -316,6 +363,8 @@ fn give_back_magnet_links() -> String {
 /// profile folder is kept: it holds the user's own data.
 pub fn remove(dry_run: bool) -> Result<Vec<String>, String> {
     let mut log = Vec::new();
+    // A dry run says what it would do, not that it did it.
+    let did = |what: &str| if dry_run { format!("would remove {what}") } else { format!("removed {what}") };
     let base = base_dir().ok_or("LOCALAPPDATA is not set")?;
     for folder in shortcut_folders()? {
         let lnk = folder.join("Gamblium.lnk");
@@ -323,13 +372,13 @@ pub fn remove(dry_run: bool) -> Result<Vec<String>, String> {
             if !dry_run {
                 fs::remove_file(&lnk).map_err(|e| e.to_string())?;
             }
-            log.push(format!("removed shortcut {}", lnk.display()));
+            log.push(did(&format!("shortcut {}", lnk.display())));
         }
     }
     if !dry_run {
         crate::host::install(crate::host::EXTENSION_ID, true)?;
     }
-    log.push("helper registration removed".into());
+    log.push(did("the helper's registration"));
     if dry_run {
         log.push("would give magnet links back".into());
     } else {
@@ -351,15 +400,32 @@ pub fn remove(dry_run: bool) -> Result<Vec<String>, String> {
                 let _ = if p.is_dir() { fs::remove_dir_all(&p) } else { fs::remove_file(&p) };
             }
         }
-        log.push(format!("removed program files in {}", app.display()));
+        log.push(did(&format!("program files in {}", app.display())));
     }
-    log.push(format!("kept your profile in {}", base.join("User Data").display()));
+    log.push(format!("{} your profile in {}", if dry_run { "would keep" } else { "kept" }, base.join("User Data").display()));
     Ok(log)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_code_stamp_follows_the_files_and_not_itself() {
+        let ext = std::env::temp_dir().join(format!("gamblium-test-stamp-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&ext);
+        fs::create_dir_all(ext.join("ui")).unwrap();
+        fs::write(ext.join("background.js"), "A").unwrap();
+        fs::write(ext.join("ui").join("page.js"), "p").unwrap();
+        let a = write_code_stamp(&ext).unwrap();
+        assert_eq!(a.len(), 16);
+        let text = fs::read_to_string(ext.join(CODE_STAMP_FILE)).unwrap();
+        assert!(text.contains(&format!("export const CODE_STAMP = \"{a}\";")), "{text}");
+        assert_eq!(write_code_stamp(&ext).unwrap(), a); // its own file does not count
+        fs::write(ext.join("ui").join("page.js"), "q").unwrap();
+        assert_ne!(write_code_stamp(&ext).unwrap(), a);
+        let _ = fs::remove_dir_all(&ext);
+    }
 
     #[test]
     fn copy_tree_copies_nested_files_and_leaves_out_tests_and_caches() {

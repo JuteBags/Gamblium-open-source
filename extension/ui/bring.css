@@ -1,0 +1,21 @@
+/* "Bring your stuff over": Settings and the welcome page share it (bring.js). Colours come from
+   whichever page it sits in: Settings' tokens, or the welcome page's own. */
+.bring { display: grid; gap: 10px; }
+.bring-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.bring-import { height: auto; padding: 9px 14px; border-radius: var(--radius-control, 8px); font-weight: 600; cursor: pointer;
+  background: var(--accent, #3b6fd8); color: var(--on-accent, #fff); border: 0; }
+.bring-note, .bring-status { margin: 0; font-size: 13px; color: var(--text-muted, var(--muted, #6b7280)); }
+.bring-head { margin: 8px 0 0; font-size: 13px; font-weight: 600; letter-spacing: .02em; color: var(--text-muted, var(--muted, #6b7280)); }
+.bring-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.bring-row { display: flex; align-items: center; gap: 12px; padding: 7px 10px; border-radius: var(--radius-md, 8px);
+  background: color-mix(in srgb, var(--text, #222) 4%, transparent); }
+.bring-row[hidden] { display: none; }
+.bring-row.done { opacity: .55; }
+.bring-row.done .bring-go::before { content: "✓ "; }
+.bring-text { display: grid; min-width: 0; flex: 1; }
+.bring-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bring-from { font-size: 12px; color: var(--text-muted, var(--muted, #6b7280)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bring-go, .bring-more { height: auto; padding: 5px 12px; border-radius: var(--radius-control, 8px); cursor: pointer; white-space: nowrap;
+  background: transparent; color: var(--text, inherit); border: 1px solid var(--border, var(--rim, rgba(127,127,127,.4))); font: inherit; font-size: 13px; }
+.bring-go:hover, .bring-more:hover { border-color: var(--accent, #3b6fd8); }
+.bring-more { justify-self: start; }

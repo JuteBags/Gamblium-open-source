@@ -1184,3 +1184,36 @@ table.tabs tbody tr.lit td.actions button { opacity: 1; }
 .blocks .block.lit { filter: brightness(1.12) saturate(1.15); box-shadow: inset 0 0 0 2px var(--highlight); }
 /* Tabs and memory, Tab groups card: a group's name with its tab-strip colour, as in Recently closed (#223). */
 .gdot::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 8px; border-radius: 50%; vertical-align: -1px; background: var(--group, #9aa0a6); box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 25%, transparent); }
+
+/* ==== Group icons (Tabs and memory > Groups): an emoji in front of the group's name ==== */
+.gname { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.gname .gdot { white-space: nowrap; }
+.iconbtn { font-size: 12px; padding: 1px 7px; height: auto; min-height: 0; opacity: .7; }
+tr:hover .iconbtn, .iconbtn[aria-expanded="true"] { opacity: 1; }
+tr.limitedit td { white-space: normal; }
+.iconpicks { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; max-width: 230px; }
+.iconpicks .textlink { margin-left: 6px; }
+.iconpick { width: 30px; height: 30px; padding: 0; font-size: 18px; line-height: 1; border-radius: var(--radius-sm, 6px); }
+.iconpick.on { box-shadow: inset 0 0 0 2px var(--accent); }
+
+/* ==== Decode and encode (Security > For testers) ==== */
+.decoder textarea { width: 100%; box-sizing: border-box; font-family: var(--font-mono); font-size: 13px; resize: vertical; }
+.decops { flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.decops button { height: auto; padding: 5px 10px; font-size: 13px; }
+#decJwt { margin: 4px 0 8px; }
+#decJwt p { margin: 2px 0; }
+#decJwt .jwtline { font-weight: 600; }
+#decJwt .warn { color: var(--danger); }
+
+/* ==== Logins agents may use (Settings > Agents) ==== */
+.loginlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.loginlist li { display: flex; align-items: center; gap: 12px; }
+.loginlist li .mono { font-weight: 600; }
+.loginlist li .hint { flex: 1; }
+.loginform { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.loginform label { display: grid; gap: 4px; font-size: 13px; }
+
+/* Settings > Appearance, links on darkened websites: a sample on a dark page's background. */
+.linkdemo { display: inline-flex; gap: 12px; padding: 6px 12px; border-radius: 8px; background: #121212; box-shadow: inset 0 0 0 1px var(--rim); }
+.linkdemo b { font-weight: 400; text-decoration: underline; text-underline-offset: 2px; }
+.presets .set.link i { box-shadow: inset 0 0 0 1px var(--rim), inset 0 0 0 7px #121212; }

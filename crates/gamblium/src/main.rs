@@ -1,11 +1,14 @@
+mod agentlog;
 mod audit;
 mod capture;
+mod bring;
 mod dl;
 mod host;
 mod pack;
 mod update;
 mod install;
 mod launch;
+mod logins;
 mod permit;
 mod private;
 mod procs;
@@ -544,6 +547,14 @@ fn main() {
         Cmd::Relaunch { pid, user_data_dir } => {
             // Let the helper's answer reach the page first.
             std::thread::sleep(std::time::Duration::from_millis(700));
+            // A named session is closed its own way (tabs noted); its next command starts it again.
+            let sessions = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Gamblium").join("sessions"));
+            if let (Some(root), Some(name)) = (sessions, user_data_dir.file_name()) {
+                if user_data_dir.parent().is_some_and(|p| crate::dl::profile_key(p) == crate::dl::profile_key(&root)) {
+                    let _ = crate::sessions::command(&["close".to_owned(), name.to_string_lossy().into_owned()]);
+                    return;
+                }
+            }
             close_browser(pid, &user_data_dir);
             for _ in 0..40 {
                 if !procs::browser_running("brave.exe", Some(&user_data_dir)) {
@@ -1249,6 +1260,10 @@ fn run_launch(mut a: LaunchArgs) -> Result<(), String> {
         let welcome = !(a.skip_welcome || debug_port.is_some() || a.agent || a.pentest);
         if !dry_run && (a.theme.is_some() || extension_freezes || !welcome || prefs_dir.join(launch::LAUNCH_INFO_FILE).exists()) {
             launch::write_launch_info(&prefs_dir, a.theme.as_deref(), extension_freezes, welcome).map_err(|e| format!("launch note: {e}"))?;
+        }
+        let force_dark = preset.args.iter().any(|x| x.contains("WebContentsForceDark"));
+        if !dry_run && (force_dark || prefs_dir.join(launch::LAUNCH_INFO_FILE).exists()) {
+            launch::note_force_dark(&prefs_dir, force_dark).map_err(|e| format!("launch note: {e}"))?;
         }
         let changed = launch::apply_local_state(&prefs_dir, &preset.local_state, dry_run)
             .map_err(|e| format!("Local State: {e}"))?;

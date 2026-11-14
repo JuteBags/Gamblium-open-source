@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Scratchpad</title>
+<link rel="stylesheet" href="tokens.css">
+<script src="scheme.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: var(--surface, #1c1f26); color: var(--text, #e8eaf0); font: 14px/1.5 var(--font-ui, "Segoe UI", system-ui, sans-serif); }
+  main { display: grid; grid-template-rows: auto 1fr auto; height: 100%; box-sizing: border-box; padding: 12px; gap: 8px; }
+  h1 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text-muted, #a3a9b7); }
+  textarea { width: 100%; height: 100%; box-sizing: border-box; resize: none; padding: 10px 12px; border-radius: var(--radius-md, 8px);
+    border: 1px solid var(--border, #3a3f4b); background: var(--bg, #14161b); color: inherit; font: inherit; outline: none; }
+  textarea:focus { border-color: var(--accent, #7aa2ff); }
+  p { margin: 0; font-size: 12px; color: var(--text-muted, #a3a9b7); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Scratchpad</h1>
+  <textarea id="notes" spellcheck="true" placeholder="Anything you want to keep at hand. The same notes as on the new tab page."></textarea>
+  <p id="said">Saved as you type.</p>
+</main>
+<script type="module" src="scratch.js"></script>
+</body>
+</html>

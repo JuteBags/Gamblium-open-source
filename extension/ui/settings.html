@@ -8,6 +8,7 @@
 <link rel="icon" href="icons/icon-32.png">
 <link rel="stylesheet" href="tokens.css">
 <link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="bring.css">
 <script src="scheme.js"></script>
 <script src="../content/menu.js" defer></script>
 </head>
@@ -44,6 +45,7 @@
       <a href="#gamblium" data-area="gamblium">Gamblium<span>Version and updates</span></a>
       <a href="#profile" data-area="profile">This profile<span>Label and folder</span></a>
       <a href="#browser" data-area="browser">Browser<span>Search, privacy, passwords</span></a>
+      <a href="#bring" data-area="bring">Bring your stuff over<span>Accounts in other browsers, import</span></a>
     </nav>
     <div class="area">
       <section class="panel" data-area="tabs" aria-labelledby="freeze-title">
@@ -78,6 +80,14 @@
           <div class="field">
             <label class="check"><input type="checkbox" id="protectUploads"> Do not freeze a tab while it is uploading</label>
             <p class="hint">Needs permission to see request sizes on every site.</p>
+          </div>
+          <div class="field">
+            <label class="check"><input type="checkbox" id="popOutVideo"> Pop out a playing video when you leave its tab</label>
+            <p class="hint">It keeps playing in a small window; coming back to the tab puts it back.</p>
+          </div>
+          <div class="field">
+            <label class="check"><input type="checkbox" id="peekOn"> Peek: Shift+click a link to preview it</label>
+            <p class="hint">The page opens as a card over this one; "Open as tab" keeps it, a click outside or Esc closes it.</p>
           </div>
         </div>
       </section>
@@ -183,6 +193,16 @@
             </div>
           </div>
           <div class="field">
+            <span class="name">Links on darkened websites</span>
+            <div id="linkSets" class="presets" role="group" aria-label="Link colours"></div>
+            <div class="inline">
+              <label class="swatch"><input type="color" id="ownLink" value="#8acad8"> Link</label>
+              <label class="swatch"><input type="color" id="ownVisited" value="#9eb7d6"> Visited link</label>
+              <span class="linkdemo" id="linkDemo" aria-hidden="true"><b id="demoLink">a link</b> <b id="demoVisited">a visited link</b></span>
+            </div>
+            <p class="hint" id="linkHint">When light-only websites are made dark, their blue links would come out pink; they get this colour instead. Pages already open change when reloaded.</p>
+          </div>
+          <div class="field">
             <label class="name" for="lightSites">Keep these sites light</label>
             <textarea id="lightSites" rows="3" spellcheck="false" placeholder="e.g. docs.google.com"></textarea>
             <p class="hint" id="lightSitesHint">Kept as designed when sites are made dark. One per line.</p>
@@ -204,6 +224,20 @@
               <button type="button" data-open="chrome://extensions/">Extensions<span>Add, remove, switch off</span></button>
             </div>
           </div>
+          <div class="field">
+            <label class="check"><input type="checkbox" id="bangsOn"> !bangs in the address bar</label>
+            <p class="hint">"!w moon" or "moon !w" searches Wikipedia; !yt, !gh, !a (Amazon), !fk, !m (maps), !t (translate), !cl (Claude), !p (Perplexity) and about 40 more.</p>
+            <label for="ownBangs" class="name">Your own, one per line: the bang, then the address with %s for the words</label>
+            <textarea id="ownBangs" rows="3" spellcheck="false" placeholder="jira https://acme.atlassian.net/issues/?jql=text~%22%s%22"></textarea>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" data-area="bring" aria-labelledby="bring-title">
+        <header><h2 id="bring-title">Bring your stuff over</h2></header>
+        <p class="lead">Where you are signed in with Chrome, Brave, Edge and Comet on this computer, to sign in again here. Read only; no password is read.</p>
+        <div class="fields">
+          <div class="field" id="bringBox"></div>
         </div>
       </section>
 
@@ -222,13 +256,10 @@
         <p class="lead">Faster on slow servers; picks up interrupted files.</p>
         <div class="fields">
           <div class="field">
-            <span class="name">Which downloads it takes over</span>
-            <label class="check"><input type="radio" name="ownDownloader" value="big"> Big files only</label>
-            <label class="check"><input type="radio" name="ownDownloader" value="always"> Every download</label>
+            <span class="name">Which downloads it takes</span>
+            <label class="check"><input type="radio" name="ownDownloader" value="always"> Every download, private windows too</label>
             <label class="check"><input type="radio" name="ownDownloader" value="off"> None: the browser downloads everything</label>
-          </div>
-          <div class="field" id="ownMinField">
-            <div class="inline"><label for="ownMinMb">Hand files of</label> <input type="number" id="ownMinMb" min="1" max="100000" step="1"> <span>MB and more to Gamblium's downloader</span></div>
+            <p class="hint">Files a page makes itself (blob: and data: addresses) stay with the browser.</p>
           </div>
           <div class="field">
             <label class="check"><input type="checkbox" id="ownTorrents"> Open torrent files and magnet links in Gamblium's downloader</label>
@@ -286,6 +317,21 @@
             <p class="hint" id="permitOff" hidden>Switch command-line control on first.</p>
             <p class="hint">Without a permission, an agent waits for your answer.</p>
           </div>
+        </div>
+      </section>
+
+      <section class="panel" data-area="agents" aria-labelledby="logins-title">
+        <header><h2 id="logins-title">Logins agents may use</h2></header>
+        <p class="lead">An agent can sign in with these (<span class="mono cmd">login</span>) without ever seeing them: Gamblium types them into the site's own page. Kept sealed on this computer; each use asks you first unless you allow it for a while.</p>
+        <div class="fields">
+          <ul id="loginList" class="loginlist"></ul>
+          <form id="loginForm" class="loginform" autocomplete="off">
+            <label>Site <input id="loginSite" type="text" placeholder="github.com" required spellcheck="false"></label>
+            <label>User name <input id="loginUser" type="text" spellcheck="false" autocomplete="off"></label>
+            <label>Password <input id="loginPass" type="password" required autocomplete="new-password"></label>
+            <button type="submit" class="primary">Save</button>
+          </form>
+          <p id="loginSaid" class="hint" role="status"></p>
         </div>
       </section>
 

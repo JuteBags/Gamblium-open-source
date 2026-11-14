@@ -63,17 +63,17 @@ test("big web downloads go to our own downloader, the rest stay with Brave", asy
   const MB = 1024 * 1024;
   const big = { state: "in_progress", url: "https://x.org/a.iso", filename: String.raw`C:\Users\me\Downloads\a.iso`, totalBytes: 700 * MB };
   assert.equal(stayReason(big, {}, "me"), null);
-  assert.equal(stayReason({ ...big, totalBytes: 5 * MB }, {}, "me"), "small file");
-  assert.equal(stayReason({ ...big, totalBytes: 5 * MB }, { ownDownloader: "always" }, "me"), null);
-  assert.equal(stayReason({ ...big, totalBytes: -1 }, {}, "me"), "size unknown");
+  // No minimum, no size needed, the old "big" setting means every download, private windows too.
+  assert.equal(stayReason({ ...big, totalBytes: 5 }, {}, "me"), null);
+  assert.equal(stayReason({ ...big, totalBytes: -1 }, { ownDownloader: "big" }, "me"), null);
+  assert.equal(stayReason({ ...big, incognito: true }, {}, "me"), null);
   assert.equal(stayReason(big, { ownDownloader: "off" }, "me"), "switched off");
-  assert.equal(stayReason({ ...big, incognito: true }, {}, "me"), "private window");
   assert.equal(stayReason({ ...big, byExtensionId: "me" }, {}, "me"), "handed back");
   assert.equal(stayReason({ ...big, url: "blob:https://x.org/1" }, {}, "me"), "not a web address");
   assert.equal(stayReason({ ...big, url: "data:text/plain,hi" }, { ownDownloader: "always" }, "me"), "not a web address");
-  assert.equal(stayReason({ ...big, filename: "" }, {}, "me"), "no place to save yet");
+  assert.equal(stayReason({ ...big, filename: "a.iso" }, {}, "me"), null);
   assert.equal(stayReason({ ...big, state: "complete" }, {}, "me"), "not running");
-  assert.equal(stayReason({ ...big, finalUrl: "https://cdn.x.org/a.iso", url: "https://x.org/go" }, { ownDownloaderMinMb: 800 }, "me"), "small file");
+  assert.equal(stayReason({ ...big, url: "blob:https://x.org/1", finalUrl: "https://x.org/a" }, {}, "me"), "not a web address");
   assert.deepEqual(splitPath(String.raw`C:\Users\me\Downloads\a.iso`), { dir: String.raw`C:\Users\me\Downloads`, name: "a.iso" });
   assert.deepEqual(splitPath("/home/me/a.iso"), { dir: "/home/me", name: "a.iso" });
 });

@@ -32,24 +32,22 @@ export const OWN_DEFAULTS = {
   ownTorrents: true,
   // Minutes to keep sharing a finished torrent. 0: stop when it is whole.
   seedMinutes: 0,
-  ownDownloader: "big", // "off" | "big" | "always"
-  ownDownloaderMinMb: 64,
+  // "always" | "off". Every download is ours (owner, Nov 14 2026: no minimum; Brave only for
+  // what we cannot fetch: blob:, data:). "big" was the old 64 MB rule and now means "always".
+  ownDownloader: "always",
 };
 
 // Why this download stays with Brave, or null if our downloader takes it.
 export function stayReason(item, settings, ownId) {
+  // Asked while Brave is still choosing the file's name, before it shows the download
+  // anywhere: what we take, nobody sees Brave start. Private windows too.
   const s = { ...OWN_DEFAULTS, ...settings };
   if (s.ownDownloader === "off") return "switched off";
   if (!item || item.state !== "in_progress") return "not running";
-  if (item.incognito) return "private window";
   // A download we handed back to Brave ourselves must not come round again.
   if (ownId && item.byExtensionId === ownId) return "handed back";
-  const url = item.finalUrl || item.url || "";
-  if (!/^https?:\/\//i.test(url)) return "not a web address";
-  if (!item.filename || !/[\\/]/.test(item.filename)) return "no place to save yet";
-  if (s.ownDownloader === "always") return null;
-  if (!(item.totalBytes > 0)) return "size unknown";
-  if (item.totalBytes < s.ownDownloaderMinMb * 1024 * 1024) return "small file";
+  const web = (u) => /^https?:\/\//i.test(u || "");
+  if (!web(item.url) || !web(item.finalUrl || item.url)) return "not a web address";
   return null;
 }
 

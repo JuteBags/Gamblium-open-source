@@ -196,6 +196,38 @@ pub fn start_apply(installer: &Path, start_after: bool) -> Result<(), String> {
     crate::launch::spawn_detached(&copy, &args).map_err(|e| e.to_string())
 }
 
+/// Every other browser started from Gamblium's browser folder: named sessions are closed their
+/// own way (tabs noted, they come back), anything else (the agent profile, test windows) ends.
+fn stop_other_browsers() {
+    let Some(folder) = crate::rebrand::copy_dir() else { return };
+    let folder = folder.to_string_lossy().to_ascii_lowercase();
+    let ours = || -> Vec<(u32, Option<String>)> {
+        crate::procs::browsers("brave.exe")
+            .into_iter()
+            .filter(|(pid, _)| crate::procs::exe_of(*pid).is_some_and(|e| e.to_string_lossy().to_ascii_lowercase().starts_with(&folder)))
+            .collect()
+    };
+    for (_, dir) in ours() {
+        let name = dir.as_deref().and_then(|d| {
+            let lower = d.to_ascii_lowercase().replace('/', "\\");
+            lower.contains("\\gamblium\\sessions\\").then(|| d.trim_end_matches(['\\', '/']).rsplit(['\\', '/']).next().unwrap_or("").to_owned())
+        });
+        if let Some(name) = name.filter(|n| !n.is_empty()) {
+            let _ = crate::sessions::command(&["close".to_owned(), name]);
+        }
+    }
+    for _ in 0..20 {
+        let left = ours();
+        if left.is_empty() {
+            return;
+        }
+        for (pid, _) in left {
+            let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).output();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}
+
 /// Run by the copy: waits for the browser of Gamblium's own profile to end (up to 10 minutes),
 /// runs the installer silently, then starts Gamblium if asked.
 pub fn apply(installer: &Path, start_after: bool) -> Result<(), String> {
@@ -209,6 +241,9 @@ pub fn apply(installer: &Path, start_after: bool) -> Result<(), String> {
     if crate::procs::browser_running("brave.exe", Some(&profile)) {
         return Err("Gamblium is still open".into());
     }
+    // Browsers nobody sees keep the browser's files open and the installer cannot replace them
+    // (owner, Nov 14 2026: "could not be set up (code 1)" with a hidden test session running).
+    stop_other_browsers();
     set_state(json!({ "state": "installing", "at": now() }));
     let status = std::process::Command::new(installer)
         .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"])

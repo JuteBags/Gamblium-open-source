@@ -8,6 +8,7 @@ import {
   fmtMb, fmtPct, fmtDelay, siteLabel, stateOf, countStates, statesLine, tabPill, sortTabs, meterPct, weightOf, freeLevel, cpuLevel, WEIGHT_MB, kindRows, reasonRows,
   filterTabs, mapBlocks, groupByWindow, GROUP_COLOURS,
 } from './pages-logic.js';
+import { splitGroupIcon, GROUP_ICONS } from '../tabstats.js';
 
 let sortKey = 'memory';
 let sortDesc = true;
@@ -178,6 +179,30 @@ function renderTabs() {
 // Memory and processor per tab group, and a limit for each named group: over it, the group's
 // hidden tabs are put to sleep (memory) or frozen (processor) by the minute check.
 let limitEditing = null; // the title of the group whose limit is being edited
+let iconEditing = null; // the id of the group whose icon is being picked
+
+function iconPicker(g) {
+  const pick = async (icon) => {
+    const r = await send({ type: 'group-icon-set', groupId: g.groupId, icon });
+    if (r?.ok === false) $('did').textContent = r.error;
+    iconEditing = null;
+    read({ keepTable: true });
+  };
+  const current = splitGroupIcon(g.title).icon;
+  const buttons = GROUP_ICONS.map((i) => {
+    const b = el('button', { type: 'button', className: 'iconpick' + (i === current ? ' on' : ''), textContent: i, title: i });
+    b.addEventListener('click', () => pick(i));
+    return b;
+  });
+  const none = el('button', { type: 'button', className: 'textlink', textContent: 'No icon' });
+  none.addEventListener('click', () => pick(''));
+  const cancel = el('button', { type: 'button', className: 'textlink', textContent: 'Cancel' });
+  cancel.addEventListener('click', () => { iconEditing = null; read({ keepTable: true }); });
+  const row = el('div', { className: 'iconpicks', role: 'group', ariaLabel: 'Icon for this group' }, [...buttons, none, cancel]);
+  row.addEventListener('keydown', (e) => { if (e.key === 'Escape') { iconEditing = null; read({ keepTable: true }); } });
+  setTimeout(() => buttons[0]?.focus(), 0);
+  return el('tr', { className: 'limitedit' }, el('td', { colSpan: 5 }, row));
+}
 function limitEditor(g) {
   const num = (id, value, max, step) => el('input', { type: 'number', id, min: 0, max, step, value: value ?? '', placeholder: 'none', inputMode: 'numeric' });
   const mb = num('limMb', g.limit?.memoryMb, 65536, 50);
@@ -207,7 +232,7 @@ function limitEditor(g) {
 
 function renderGroups(stats) {
   // While a limit is being typed, the 5-second refresh leaves the table alone (it would take the focus).
-  if (limitEditing && $('groups').querySelector('.limitedit')) return;
+  if ((limitEditing || iconEditing !== null) && $('groups').querySelector('.limitedit')) return;
   const groups = stats.ok ? stats.groups || [] : [];
   $('groupsPanel').hidden = groups.length === 0;
   if (!groups.length) return;
@@ -217,12 +242,23 @@ function renderGroups(stats) {
     limit.setAttribute('aria-expanded', String(limitEditing === g.title));
     limit.addEventListener('click', () => {
       limitEditing = limitEditing === g.title ? null : g.title;
+      iconEditing = null;
       $('groups').querySelector('.limitedit')?.remove();
       renderGroups(stats);
     });
     const name = el('span', { className: 'gdot', textContent: g.title || 'Unnamed group' });
     name.style.setProperty('--group', GROUP_COLOURS[g.color] ?? GROUP_COLOURS.grey); // its colour in the tab strip
-    const tr = el('tr', {}, [td(name), td(`${g.awake}/${g.tabs}`, 'num'), td(fmtMb(g.memoryMb), 'num'), td(fmtPct(g.cpuPct), 'num'), td(limit, 'num')]);
+    const has = splitGroupIcon(g.title).icon;
+    const icon = el('button', { type: 'button', className: 'quiet iconbtn', textContent: '+', ariaLabel: 'Group icon', title: has ? "Change this group's icon" : 'Give this group an icon (shown in the tab strip)' });
+    icon.setAttribute('aria-expanded', String(iconEditing === g.groupId));
+    icon.addEventListener('click', () => {
+      iconEditing = iconEditing === g.groupId ? null : g.groupId;
+      limitEditing = null;
+      $('groups').querySelector('.limitedit')?.remove();
+      renderGroups(stats);
+    });
+    const tr = el('tr', {}, [td(el('span', { className: 'gname' }, [name, icon])), td(`${g.awake}/${g.tabs}`, 'num'), td(fmtMb(g.memoryMb), 'num'), td(fmtPct(g.cpuPct), 'num'), td(limit, 'num')]);
+    if (iconEditing === g.groupId) return [tr, iconPicker(g)];
     return limitEditing === g.title ? [tr, limitEditor(g)] : [tr];
   }).flat();
   $('groups').replaceChildren(el('div', { className: 'tablewrap' }, el('table', {}, [el('thead', {}, head), el('tbody', {}, body)])));

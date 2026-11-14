@@ -58,7 +58,7 @@
 
   <!-- Tools for testers: used now and then, so folded at the foot (Rule 11). -->
   <details class="panel fold testers" id="testers">
-    <summary>For testers <span class="fstate">Ports, proxy, requests · only for sites you may test</span></summary>
+    <summary>For testers <span class="fstate">Ports, proxy, requests, decoding · only for sites you may test</span></summary>
   <div class="grid cols-2" style="margin-top: 14px">
     <section class="panel" aria-labelledby="ports-title">
       <header>
@@ -97,6 +97,28 @@
     </div>
     <div id="capOut" class="tablewrap"></div>
     <div id="capDetail" hidden></div>
+  </section>
+
+  <section class="panel decoder" aria-labelledby="dec-title">
+    <header><h2 id="dec-title" title="Works on this computer; nothing is sent.">Decode and encode</h2></header>
+    <label class="sr" for="decIn">Text to decode or encode</label>
+    <textarea id="decIn" rows="4" spellcheck="false" placeholder="Paste a token, Base64, a URL-encoded string, hex…  A JWT is read by itself."></textarea>
+    <div class="row decops">
+      <button type="button" data-op="base64-decode">Base64 ↓</button>
+      <button type="button" data-op="base64-encode">Base64 ↑</button>
+      <button type="button" data-op="base64url-encode">Base64url ↑</button>
+      <button type="button" data-op="url-decode">URL ↓</button>
+      <button type="button" data-op="url-encode">URL ↑</button>
+      <button type="button" data-op="hex-decode">Hex ↓</button>
+      <button type="button" data-op="hex-encode">Hex ↑</button>
+      <button type="button" data-op="html-decode">HTML ↓</button>
+      <button type="button" data-op="html-encode">HTML ↑</button>
+      <button type="button" data-op="json-pretty">JSON</button>
+    </div>
+    <div id="decJwt" hidden></div>
+    <div class="spread"><span id="decNote" class="muted"></span><button type="button" id="decUse" class="quiet" hidden>Use as input</button></div>
+    <label class="sr" for="decOut">Result</label>
+    <textarea id="decOut" rows="5" spellcheck="false" readonly></textarea>
   </section>
   </details>
 </main>

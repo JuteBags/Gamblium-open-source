@@ -3,7 +3,7 @@
 //! (`plan::Adaptive`); several addresses of the same file may be given.
 
 use crate::plan::{self, Adaptive};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
 use std::io::Read;
@@ -18,6 +18,9 @@ pub struct Options {
     pub dir: PathBuf,
     pub max_connections: usize,
     pub headers: Vec<(String, String)>,
+    /// Login cookies by host name. Each request, every hop of a redirect included, carries only
+    /// the cookies of the host it goes to, as the browser does.
+    pub cookies: Vec<(String, String)>,
     pub json: bool,
     pub quiet: bool,
     /// A download that receives nothing at all for this long is given up
@@ -41,6 +44,8 @@ pub struct Done {
 }
 
 struct Probe {
+    /// The address that was asked (before redirects): asked again when the one it led to expires.
+    asked: String,
     url: String,
     size: Option<u64>,
     ranges: bool,
@@ -48,38 +53,61 @@ struct Probe {
     tag: String,
 }
 
-/// With a login cookie on board a redirect is not followed: the cookie
-/// belongs to the site it came from and must not travel to another one.
-static NO_REDIRECTS: AtomicBool = AtomicBool::new(false);
+/// Login cookies by host, set by `download` for its run (empty for a torrent's web address).
+static COOKIES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 
+fn cookie_for(url: &url::Url) -> Option<String> {
+    let host = url.host_str()?;
+    COOKIES.lock().unwrap().iter().find(|(h, _)| h.eq_ignore_ascii_case(host)).map(|(_, c)| c.clone())
+}
+
+/// Redirects are followed here, not by the HTTP library, so that a login cookie goes only to
+/// the host it belongs to (owner, Nov 14 2026: signed-in downloads that redirect, and safety
+/// first). A signed address that a link leads to (GitHub, Drive) gets no cookie of the site
+/// that sent us there.
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(15))
+        // Every address of a server is tried at once; the first to answer is used (fastconnect.rs).
+        .resolver(crate::fastconnect::FirstToAnswer)
+        .timeout_connect(Duration::from_secs(5))
         .timeout_read(Duration::from_secs(30))
-        .redirects(if NO_REDIRECTS.load(SeqCst) { 0 } else { 10 })
+        .redirects(0)
         .user_agent(concat!("gamblium-dl/", env!("CARGO_PKG_VERSION")))
         .build()
 }
 
 fn request(agent: &ureq::Agent, url: &str, headers: &[(String, String)], range: Option<(u64, Option<u64>)>) -> Result<ureq::Response, Fail> {
-    let mut req = agent.get(url);
-    for (k, v) in headers {
-        req = req.set(k, v);
+    let mut at = url::Url::parse(url).map_err(|e| Fail { pushed_back: false, fatal: true, code: 0, text: format!("{url}: {e}") })?;
+    for _hop in 0..10 {
+        let mut req = agent.get(at.as_str());
+        for (k, v) in headers.iter().filter(|(k, _)| !k.eq_ignore_ascii_case("cookie")) {
+            req = req.set(k, v);
+        }
+        if let Some(c) = cookie_for(&at) {
+            req = req.set("Cookie", &c);
+        }
+        if let Some((from, to)) = range {
+            let value = match to {
+                Some(to) => format!("bytes={from}-{to}"),
+                None => format!("bytes={from}-"),
+            };
+            req = req.set("Range", &value);
+        }
+        match req.call() {
+            Ok(r) if (300..400).contains(&r.status()) => {
+                let next = r.header("Location").and_then(|l| at.join(l).ok());
+                match next {
+                    // Never from https down to http.
+                    Some(n) if matches!(n.scheme(), "https") || (n.scheme() == "http" && at.scheme() == "http") => at = n,
+                    _ => return Err(Fail { pushed_back: false, fatal: true, code: r.status(), text: format!("the server sends us elsewhere ({}) without a usable address", r.status()) }),
+                }
+            }
+            Ok(r) => return Ok(r),
+            Err(ureq::Error::Status(code, _)) => return Err(Fail { pushed_back: matches!(code, 429 | 503 | 509), fatal: matches!(code, 400..=428 | 430..=499), code, text: format!("the server answered {code}") }),
+            Err(e) => return Err(Fail { pushed_back: false, fatal: false, code: 0, text: e.to_string() }),
+        }
     }
-    if let Some((from, to)) = range {
-        let value = match to {
-            Some(to) => format!("bytes={from}-{to}"),
-            None => format!("bytes={from}-"),
-        };
-        req = req.set("Range", &value);
-    }
-    match req.call() {
-        // With redirects off a 3xx comes back as an answer; it is not the file.
-        Ok(r) if (300..400).contains(&r.status()) => Err(Fail { pushed_back: false, fatal: true, text: format!("the server sends us elsewhere ({}), and a login cookie does not follow", r.status()) }),
-        Ok(r) => Ok(r),
-        Err(ureq::Error::Status(code, _)) => Err(Fail { pushed_back: matches!(code, 429 | 503 | 509), fatal: matches!(code, 400..=428 | 430..=499), text: format!("the server answered {code}") }),
-        Err(e) => Err(Fail { pushed_back: false, fatal: false, text: e.to_string() }),
-    }
+    Err(Fail { pushed_back: false, fatal: true, code: 0, text: "more than 10 redirects".into() })
 }
 
 struct Fail {
@@ -87,6 +115,8 @@ struct Fail {
     pushed_back: bool,
     /// Trying again cannot help (404, 403...).
     fatal: bool,
+    /// The HTTP status, 0 when there was none.
+    code: u16,
     text: String,
 }
 
@@ -97,12 +127,13 @@ fn probe(agent: &ureq::Agent, url: &str, headers: &[(String, String)]) -> Result
     let name = plan::name_for(resp.header("Content-Disposition"), resp.get_url());
     let tag = resp.header("ETag").or(resp.header("Last-Modified")).unwrap_or("").to_owned();
     let final_url = resp.get_url().to_owned();
+    let asked = url.to_owned();
     if resp.status() == 206 {
         let total = resp.header("Content-Range").and_then(plan::content_range).and_then(|(_, _, t)| t);
-        return Ok(Probe { url: final_url, size: total, ranges: total.is_some(), name, tag });
+        return Ok(Probe { asked, url: final_url, size: total, ranges: total.is_some(), name, tag });
     }
     let size = resp.header("Content-Length").and_then(|v| v.parse().ok());
-    Ok(Probe { url: final_url, size, ranges: false, name, tag })
+    Ok(Probe { asked, url: final_url, size, ranges: false, name, tag })
 }
 
 #[cfg(windows)]
@@ -143,6 +174,33 @@ struct Shared {
     /// A worker with nothing left to do takes the second half of the piece
     /// with the most left, so one slow connection cannot hold up the end.
     flying: Mutex<Vec<Flying>>,
+    /// Per source: the address in use (after redirects), the one that was asked, and when the
+    /// one in use was last fetched again (seconds since the start).
+    urls: Vec<Mutex<String>>,
+    asked: Vec<String>,
+    renewed: Vec<AtomicU64>,
+    /// Held while a source's address is checked and renewed, so connections refused together
+    /// wait for the one renewal instead of giving up beside it.
+    renewing: Vec<Mutex<()>>,
+    size: u64,
+}
+
+/// A signed address that has run out (GitHub's release files after about an hour, Drive, S3):
+/// the address that was asked leads to a fresh one. At most once every 5 s per source (a fresh
+/// address that is refused at once must not loop); the size must not have changed.
+fn renew(shared: &Shared, source: usize, agent: &ureq::Agent, headers: &[(String, String)], began: Instant) -> bool {
+    let now = began.elapsed().as_secs() + 60;
+    let last = shared.renewed[source].load(SeqCst);
+    if now < last + 5 || shared.renewed[source].compare_exchange(last, now, SeqCst, SeqCst).is_err() {
+        return false;
+    }
+    match probe(agent, &shared.asked[source], headers) {
+        Ok(p) if p.size == Some(shared.size) && p.ranges => {
+            *shared.urls[source].lock().unwrap() = p.url;
+            true
+        }
+        _ => false,
+    }
 }
 
 struct Flying {
@@ -218,7 +276,7 @@ fn steal(shared: &Shared) -> Option<(u64, u64)> {
     Some((mid, last))
 }
 
-fn worker(id: usize, shared: Arc<Shared>, file: Arc<File>, urls: Arc<Vec<String>>, headers: Arc<Vec<(String, String)>>) {
+fn worker(id: usize, shared: Arc<Shared>, file: Arc<File>, headers: Arc<Vec<(String, String)>>, began: Instant) {
     let agent = agent();
     let mut buf = vec![0u8; 256 * 1024];
     let mut wait = Duration::from_millis(500);
@@ -235,7 +293,7 @@ fn worker(id: usize, shared: Arc<Shared>, file: Arc<File>, urls: Arc<Vec<String>
         let next = shared.todo.lock().unwrap().pop_front();
         let (mut from, to) = match next.or_else(|| steal(&shared)) {
             Some(piece) => piece,
-            None if shared.flying.lock().unwrap().is_empty() => break,
+            None if all_done(&shared) => break,
             None => {
                 // Others are finishing small remainders; one of them may still fail.
                 std::thread::sleep(Duration::from_millis(100));
@@ -249,11 +307,15 @@ fn worker(id: usize, shared: Arc<Shared>, file: Arc<File>, urls: Arc<Vec<String>
         let source = pick_source(&shared, turn);
         turn += 1;
         let (asked_at, first_byte) = (Instant::now(), from);
+        let used = shared.urls[source].lock().unwrap().clone();
+        // Set when this connection leaves because the target fell (a try that did not pay): with
+        // a whole-file piece it would otherwise run to the end of the file.
+        let mut leaving = false;
         let outcome: Result<(), Fail> = (|| {
-            let resp = request(&agent, &urls[source], &headers, Some((from, Some(to))))?;
+            let resp = request(&agent, &used, &headers, Some((from, Some(to))))?;
             let starts_right = resp.header("Content-Range").and_then(plan::content_range).map(|(a, _, _)| a == from).unwrap_or(false);
             if resp.status() != 206 || !starts_right {
-                return Err(Fail { pushed_back: false, fatal: urls.len() == 1, text: "the server did not send the part that was asked for".into() });
+                return Err(Fail { pushed_back: false, fatal: shared.urls.len() == 1, code: resp.status(), text: "the server did not send the part that was asked for".into() });
             }
             let mut reader = resp.into_reader();
             loop {
@@ -266,45 +328,66 @@ fn worker(id: usize, shared: Arc<Shared>, file: Arc<File>, urls: Arc<Vec<String>
                     return Ok(());
                 }
                 let room = ((to - from + 1) as usize).min(buf.len());
-                let n = reader.read(&mut buf[..room]).map_err(|e| Fail { pushed_back: false, fatal: false, text: e.to_string() })?;
+                let n = reader.read(&mut buf[..room]).map_err(|e| Fail { pushed_back: false, fatal: false, code: 0, text: e.to_string() })?;
                 if shared.stop.load(SeqCst) || from > end.load(SeqCst) {
                     // Finished or taken over while this read was waiting: write nothing.
                     return Ok(());
                 }
                 if n == 0 {
-                    return Err(Fail { pushed_back: false, fatal: false, text: "the connection closed early".into() });
+                    return Err(Fail { pushed_back: false, fatal: false, code: 0, text: "the connection closed early".into() });
                 }
-                write_at(&file, &buf[..n], from).map_err(|e| Fail { pushed_back: false, fatal: true, text: format!("could not write the file: {e}") })?;
+                write_at(&file, &buf[..n], from).map_err(|e| Fail { pushed_back: false, fatal: true, code: 0, text: format!("could not write the file: {e}") })?;
                 if first_byte_ms.load(SeqCst) == 0 {
                     first_byte_ms.store((asked.elapsed().as_millis() as u64).max(1), SeqCst);
                 }
                 from += n as u64;
                 pos.store(from, SeqCst);
                 shared.got.fetch_add(n as u64, SeqCst);
+                // The slowest connection is the one that leaves (GitHub, Nov 14 2026: the faster
+                // one left and the download ran at 0.7 MB/s for 10 s on the one that stayed).
+                let alive = shared.alive.load(SeqCst);
+                if alive > shared.want.load(SeqCst) && slowest(&shared, id) && shared.alive.compare_exchange(alive, alive - 1, SeqCst, SeqCst).is_ok() {
+                    leaving = true;
+                    return Ok(());
+                }
             }
             Ok(())
         })();
         shared.source_bytes[source].fetch_add(from - first_byte, SeqCst);
         shared.source_ms[source].fetch_add(asked_at.elapsed().as_millis().max(1) as u64, SeqCst);
-        // Off the list first, so nobody halves a piece that is being put back.
+        // Off the flying list and back on the to-do list in one step (flying is locked first,
+        // everywhere), so nobody halves a piece that is being put back and nobody sees the
+        // remainder in neither list and takes the download for finished.
         let to = {
             let mut flying = shared.flying.lock().unwrap();
             flying.retain(|f| f.worker != id);
-            end.load(SeqCst)
+            let to = end.load(SeqCst);
+            if from <= to {
+                shared.todo.lock().unwrap().push_front((from, to));
+            }
+            to
         };
+        if leaving {
+            return;
+        }
         match outcome {
             Ok(()) => {
-                if from <= to {
-                    shared.todo.lock().unwrap().push_front((from, to));
-                }
                 shared.source_fails[source].store(0, SeqCst);
                 shared.failures.store(0, SeqCst);
                 wait = Duration::from_millis(500);
             }
             Err(fail) => {
-                // What is left of this piece goes back for anyone to take.
-                if from <= to {
-                    shared.todo.lock().unwrap().push_front((from, to));
+                let _ = to;
+                // Refused where it was fine before: a signed address ran out. Ask the address
+                // that led to it for a fresh one and carry on.
+                // Another connection may already have fetched it: then just use that one.
+                let guard = shared.renewing[source].lock().unwrap();
+                let renewed_meanwhile = *shared.urls[source].lock().unwrap() != used;
+                let renewed = matches!(fail.code, 401 | 403 | 410) && used != shared.asked[source] && (renewed_meanwhile || renew(&shared, source, &agent, &headers, began));
+                drop(guard);
+                if renewed {
+                    // Not a failure of the source: straight on with the fresh address.
+                    continue;
                 }
                 shared.source_fails[source].fetch_add(1, SeqCst);
                 if fail.pushed_back {
@@ -312,11 +395,12 @@ fn worker(id: usize, shared: Arc<Shared>, file: Arc<File>, urls: Arc<Vec<String>
                 }
                 let all_bad = shared.source_fails.iter().all(|f| f.load(SeqCst) >= 3);
                 shared.failures.fetch_add(1, SeqCst);
-                *shared.last_error.lock().unwrap() = Some(format!("{}: {}", urls[source], fail.text));
+                let address = shared.urls[source].lock().unwrap().clone();
+                *shared.last_error.lock().unwrap() = Some(format!("{address}: {}", fail.text));
                 // Timeouts and resets are waited out (the main loop gives up after
                 // a minute without a single byte); only a plain "no" ends it here.
-                if (fail.fatal && urls.len() == 1) || (fail.fatal && all_bad) {
-                    *shared.error.lock().unwrap() = Some(format!("{}: {}", urls[source], fail.text));
+                if (fail.fatal && shared.urls.len() == 1) || (fail.fatal && all_bad) {
+                    *shared.error.lock().unwrap() = Some(format!("{address}: {}", fail.text));
                     shared.stop.store(true, SeqCst);
                     break;
                 }
@@ -326,6 +410,61 @@ fn worker(id: usize, shared: Arc<Shared>, file: Arc<File>, urls: Arc<Vec<String>
         }
     }
     shared.alive.fetch_sub(1, SeqCst);
+}
+
+/// The count of connections each server's downloads came to rest at, newest first, at most 200
+/// servers: `Gamblium\downloads\servers.json` under LOCALAPPDATA. Only a number per host name;
+/// no address, file or cookie.
+fn servers_file() -> Option<PathBuf> {
+    Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Gamblium").join("downloads").join("servers.json"))
+}
+
+fn remembered(host: &str) -> Option<usize> {
+    let text = fs::read_to_string(servers_file()?).ok()?;
+    let all: Value = serde_json::from_str(&text).ok()?;
+    let known: Vec<(String, usize)> = all
+        .as_array()?
+        .iter()
+        .filter_map(|e| Some((e["host"].as_str()?.to_owned(), e["connections"].as_u64()? as usize)))
+        .collect();
+    plan::first_guess(&known, host)
+}
+
+fn remember(host: &str, conns: usize) {
+    let Some(path) = servers_file() else { return };
+    if host.is_empty() {
+        return;
+    }
+    let mut all: Vec<Value> = fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    all.retain(|e| e["host"] != host);
+    all.insert(0, json!({ "host": host, "connections": conns }));
+    all.truncate(200);
+    let _ = fs::create_dir_all(path.parent().unwrap());
+    let tmp = path.with_extension("json.tmp");
+    if fs::write(&tmp, Value::Array(all).to_string()).is_ok() {
+        let _ = fs::rename(&tmp, &path);
+    }
+}
+
+/// Whether this worker's piece is arriving slowest of all pieces in flight (ties: the newest).
+fn slowest(shared: &Shared, id: usize) -> bool {
+    let rate = |f: &Flying| {
+        let ms = (f.since.elapsed().as_millis() as u64).saturating_sub(f.first_byte_ms.load(SeqCst)).max(1);
+        (f.pos.load(SeqCst) - f.first) as f64 / ms as f64
+    };
+    let flying = shared.flying.lock().unwrap();
+    let Some(me) = flying.iter().find(|f| f.worker == id) else { return true };
+    let mine = rate(me);
+    flying.iter().filter(|f| f.worker != id).all(|f| {
+        let r = rate(f);
+        mine < r || (mine == r && id > f.worker)
+    })
+}
+
+/// Nothing on either list. Flying is locked first, as everywhere.
+fn all_done(shared: &Shared) -> bool {
+    let flying = shared.flying.lock().unwrap();
+    flying.is_empty() && shared.todo.lock().unwrap().is_empty()
 }
 
 fn state_file(part: &Path) -> PathBuf {
@@ -342,6 +481,26 @@ fn save_state(part: &Path, size: u64, tag: &str, shared: &Shared, in_flight_unkn
     }
     let todo: Vec<(u64, u64)> = shared.todo.lock().unwrap().iter().copied().collect();
     let _ = fs::write(state_file(part), json!({ "size": size, "tag": tag, "todo": todo }).to_string());
+}
+
+/// While running: what is still missing is the queue plus, for each piece in flight, the part
+/// from its current position to its end. Written every 2 s, so a download that is stopped hard
+/// (Pause kills the program; so does a crash or a power cut) continues from there, not from zero
+/// (owner, Nov 14 2026: a paused GitHub download started again at 0).
+fn save_progress(part: &Path, size: u64, tag: &str, shared: &Shared) {
+    let flying = shared.flying.lock().unwrap();
+    let mut todo: Vec<(u64, u64)> = shared.todo.lock().unwrap().iter().copied().collect();
+    for f in flying.iter() {
+        let (pos, end) = (f.pos.load(SeqCst), f.end.load(SeqCst));
+        if pos <= end {
+            todo.push((pos, end));
+        }
+    }
+    todo.sort_unstable();
+    let tmp = state_file(part).with_extension("state.tmp");
+    if fs::write(&tmp, json!({ "size": size, "tag": tag, "todo": todo }).to_string()).is_ok() {
+        let _ = fs::rename(&tmp, state_file(part));
+    }
 }
 
 fn load_state(part: &Path, size: u64, tag: &str) -> Option<VecDeque<(u64, u64)>> {
@@ -387,7 +546,7 @@ pub fn mb(bytes: f64) -> String {
 }
 
 pub fn download(o: &Options) -> Result<Done, String> {
-    NO_REDIRECTS.store(o.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("cookie")), SeqCst);
+    *COOKIES.lock().unwrap() = o.cookies.clone();
     let started = Instant::now();
     let agent = agent();
     // Every address is asked once. Those that agree on the size are used together.
@@ -423,7 +582,9 @@ pub fn download(o: &Options) -> Result<Done, String> {
     let lead = probes.first().ok_or_else(|| first_error.unwrap_or_else(|| "no address given".into()))?;
     let (size, name, tag) = (lead.size, lead.name.clone(), lead.tag.clone());
     let split = lead.ranges && size.map(|s| s >= plan::SPLIT_FROM).unwrap_or(false) && o.max_connections > 1;
-    let urls: Vec<String> = probes.iter().filter(|p| p.size == size && (p.ranges || !split)).map(|p| p.url.clone()).collect();
+    let usable: Vec<&Probe> = probes.iter().filter(|p| p.size == size && (p.ranges || !split)).collect();
+    let urls: Vec<String> = usable.iter().map(|p| p.url.clone()).collect();
+    let asked: Vec<String> = usable.iter().map(|p| p.asked.clone()).collect();
 
     fs::create_dir_all(&o.dir).map_err(|e| format!("{}: {e}", o.dir.display()))?;
     let target = match &o.out {
@@ -472,7 +633,11 @@ pub fn download(o: &Options) -> Result<Done, String> {
     let resumed = load_state(&part, size, &tag);
     let todo = match &resumed {
         Some(t) => t.clone(),
-        None => plan::pieces(size, plan::piece_size(size)),
+        // One piece, the whole file: one connection streams it in one request (about 64 pieces
+        // cost a round trip each: 35-40 % slower than curl on GitHub's file host, tester Nov 14
+        // 2026). A second connection takes half of what is left (steal), and is kept only if the
+        // total speed rises.
+        None => VecDeque::from([(0, size - 1)]),
     };
     let already = size - todo.iter().map(|(a, b)| b - a + 1).sum::<u64>();
     let file = OpenOptions::new().create(true).write(true).truncate(resumed.is_none()).open(&part).map_err(|e| format!("{}: {e}", part.display()))?;
@@ -495,13 +660,19 @@ pub fn download(o: &Options) -> Result<Done, String> {
         source_bytes: urls.iter().map(|_| AtomicU64::new(0)).collect(),
         source_ms: urls.iter().map(|_| AtomicU64::new(0)).collect(),
         flying: Mutex::new(Vec::new()),
+        urls: urls.iter().map(|u| Mutex::new(u.clone())).collect(),
+        renewed: urls.iter().map(|_| AtomicU64::new(0)).collect(),
+        renewing: urls.iter().map(|_| Mutex::new(())).collect(),
+        asked,
+        size,
     });
-    let (urls, headers) = (Arc::new(urls), Arc::new(o.headers.clone()));
-    // With several sources, start with one connection to each.
-    let mut adaptive = Adaptive::new(o.max_connections);
-    while adaptive.conns < urls.len().max(o.start_connections).min(o.max_connections) {
-        adaptive.conns += 1;
-    }
+    let headers = Arc::new(o.headers.clone());
+    // Start where this server ended last time (owner, Nov 14 2026: find the right count, don't
+    // guess one); a count asked for on the command line wins; with several sources, at least one
+    // connection to each.
+    let host = url::Url::parse(&urls[0]).ok().and_then(|u| u.host_str().map(str::to_owned)).unwrap_or_default();
+    let start = if o.start_connections > 1 { o.start_connections } else { remembered(&host).unwrap_or(1) };
+    let mut adaptive = Adaptive::starting_at(o.max_connections, start.max(urls.len()));
     shared.want.store(adaptive.conns, SeqCst);
 
     let mut handles = Vec::new();
@@ -510,26 +681,34 @@ pub fn download(o: &Options) -> Result<Done, String> {
     let mut measured_from = Instant::now();
     let (mut tick, mut tick_got) = (Instant::now(), 0u64);
     let mut peak = adaptive.conns;
+    let mut learned: Option<usize> = None;
     let (mut quiet_since, mut quiet_got) = (Instant::now(), 0u64);
     let loop_started = Instant::now();
+    let mut saved_at = Instant::now();
     #[allow(unused_assignments)]
     let mut finished = false;
     loop {
         // Bring the number of workers up to the target.
-        while shared.alive.load(SeqCst) < shared.want.load(SeqCst) && !shared.stop.load(SeqCst) && (!shared.todo.lock().unwrap().is_empty() || !shared.flying.lock().unwrap().is_empty()) {
+        while shared.alive.load(SeqCst) < shared.want.load(SeqCst) && !shared.stop.load(SeqCst) && !all_done(&shared) {
             shared.alive.fetch_add(1, SeqCst);
-            let (s, f, u, h) = (shared.clone(), file.clone(), urls.clone(), headers.clone());
+            let (s, f, h) = (shared.clone(), file.clone(), headers.clone());
             let id = spawned;
             spawned += 1;
-            handles.push(std::thread::spawn(move || worker(id, s, f, u, h)));
+            handles.push(std::thread::spawn(move || worker(id, s, f, h, started)));
         }
         std::thread::sleep(Duration::from_millis(100));
+        if saved_at.elapsed() >= Duration::from_secs(2) {
+            save_progress(&part, size, &tag, &shared);
+            saved_at = Instant::now();
+        }
         let got = shared.got.load(SeqCst);
         // Bytes at a seam may be fetched twice, so the count alone proves nothing.
         // A connection whose piece was taken over may still sit in a read that
         // never returns; it has nothing left to fetch and is not waited for.
-        let nothing_left = shared.todo.lock().unwrap().is_empty()
-            && shared.flying.lock().unwrap().iter().all(|f| f.pos.load(SeqCst) > f.end.load(SeqCst));
+        let nothing_left = {
+            let flying = shared.flying.lock().unwrap();
+            shared.todo.lock().unwrap().is_empty() && flying.iter().all(|f| f.pos.load(SeqCst) > f.end.load(SeqCst))
+        };
         if shared.stop.load(SeqCst) || nothing_left {
             finished = nothing_left && !shared.stop.load(SeqCst);
             break;
@@ -556,6 +735,16 @@ pub fn download(o: &Options) -> Result<Done, String> {
             });
             (tick, tick_got) = (Instant::now(), got);
         }
+        // Nothing has arrived yet (connecting, or a slow first byte): no window is judged. A
+        // window of 0 bytes made every doubling look like a gain, up to 16 connections on a
+        // host that gets slower with each one (tester, GitHub's file host, Nov 14 2026).
+        // Likewise while a new connection is still connecting: a try judged then looks like it
+        // does not pay (a 2 s connect cost every second connection its chance, Nov 14 2026).
+        let connecting = shared.flying.lock().unwrap().iter().any(|f| f.first_byte_ms.load(SeqCst) == 0 && f.since.elapsed() < Duration::from_secs(5));
+        if got == 0 || connecting {
+            (window_start, window_got, measured_from) = (Instant::now(), got, Instant::now());
+            continue;
+        }
         // Every two seconds: is the current number of connections paying?
         let pushed = shared.pushed_back.swap(false, SeqCst);
         // The first second of a window is left out: new connections are still
@@ -567,6 +756,10 @@ pub fn download(o: &Options) -> Result<Done, String> {
         if pushed || window_start.elapsed() >= Duration::from_millis(2300) {
             let speed = (got - window_got) as f64 / measured_from.elapsed().as_secs_f64().max(0.001);
             let next = adaptive.step(speed, pushed);
+            if adaptive.at_rest() && learned != Some(next) {
+                remember(&host, next);
+                learned = Some(next);
+            }
             measured_from = Instant::now();
             shared.want.store(next, SeqCst);
             peak = peak.max(next);
@@ -574,6 +767,9 @@ pub fn download(o: &Options) -> Result<Done, String> {
         }
     }
     shared.stop.store(true, SeqCst);
+    if learned != Some(adaptive.proven()) && shared.got.load(SeqCst) > 0 {
+        remember(&host, adaptive.proven());
+    }
     if !finished {
         // Stopped early: wait, so that every unfinished piece is back on the list.
         for h in handles {

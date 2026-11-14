@@ -1,6 +1,6 @@
 [package]
 name = "gamblium"
-version = "1.0.5"
+version = "1.0.7"
 edition = "2021"
 description = "Gamblium companion CLI: process stats and launcher for the Brave base"
 license = "GPL-3.0-only"
@@ -24,6 +24,8 @@ url = "2"
 chacha20poly1305 = "0.10"
 # One short conversation with the browser's own extensions page (private.rs).
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+# Reading which sites other browsers hold a login for, never the password (bring.rs).
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

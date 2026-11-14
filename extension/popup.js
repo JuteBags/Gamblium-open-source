@@ -3,6 +3,7 @@
 // It reads once when opened and after each action; nothing runs on a timer.
 import { DEFAULTS, describeTemp } from './rules.js';
 import { $, send, el, openPage } from './ui/page.js';
+import { showUpdateBanner } from './ui/update-banner.js';
 import { zoomStep, zoomLabel, fmtMb, fmtDelay, countStates, stateShares, statesLine, cleanHost, parseHosts, hostListed, toggleHost, stateOf, filterTabs, siteLabel, markdownLink, secureChip, versionLabel } from './ui/pages-logic.js';
 
 let current = null; // the tab the popup was opened on
@@ -429,22 +430,9 @@ $('flyout').addEventListener('keydown', (e) => {
 });
 const zoomRow = document.querySelector('#viewMenu .zoom');
 $('menuRows').replaceChildren(...MENU.map((m) => (m === 'zoom' ? zoomRow : row(m))));
-// A downloaded update (the toolbar button wears a blue arrow): "Restart to update" heads the Menu.
-// Restarting closes every window, so it asks once, in place, like Exit.
-send({ type: 'update-state' }).then((u) => {
-  if (!u || u.ok === false || !u.ready) return;
-  const b = el('button', { type: 'button', role: 'menuitem', className: 'mrow update' }, [icon(ICON.update), el('span', { textContent: `Restart to update to ${versionLabel(u.update?.version) || 'the new version'}` }), el('kbd', {})]);
-  b.addEventListener('click', async () => {
-    if (!b.classList.contains('sure')) {
-      b.querySelector('span').textContent = 'Close every window and update? Your tabs come back.';
-      b.classList.add('sure');
-      return;
-    }
-    const r = await send({ type: 'update-restart' });
-    if (!r || r.ok === false) say(r?.error || 'The update could not start.');
-  });
-  $('menuRows').prepend(b, el('hr', {}));
-}).catch(() => {});
+// A downloaded update: a banner at the very top of the popup as soon as it opens (owner: people
+// must see it); it replaces the line that used to head the Menu.
+showUpdateBanner(document.body).catch(() => {});
 // Arrow keys move through the rows.
 $('viewMenu').addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
@@ -559,6 +547,21 @@ async function paintSpaceRow() {
     b.addEventListener('click', async () => { await send({ type: 'space-switch', groupId: s.id }); window.close(); });
     return el('li', {}, b);
   }));
+  // The space in view can move into a container of its own: its own cookies and logins, in its
+  // own window (a named session).
+  const here = r.spaces.find((s) => s.active);
+  if (here) {
+    const c = el('button', { type: 'button', className: 'containerbtn', textContent: 'Container', title: `Move "${here.title || 'Untitled space'}" into a container of its own: its own logins and cookies, in its own window` });
+    c.addEventListener('click', async () => {
+      c.disabled = true;
+      c.textContent = 'Moving…';
+      const a = await send({ type: 'space-container', groupId: here.id });
+      c.textContent = a?.ok ? `Moved ${a.moved}` : 'Failed';
+      c.title = a?.ok ? `In the container "${a.session}"` : (a?.error || 'Failed');
+      if (a?.ok) setTimeout(() => window.close(), 900);
+    });
+    $('spaceChips').append(el('li', {}, c));
+  }
   row.hidden = false;
 }
 paintSpaceRow();

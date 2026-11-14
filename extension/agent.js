@@ -1,3 +1,4 @@
+import { partsForScroller } from "./shot.js";
 // Commands for AI agents and scripts, sent with `gamblium ctl <op> key=value ...`.
 // They arrive through the native host, so no debugger is attached and tabs
 // still freeze and sleep as usual. The full reference is docs/agent-cli.md;
@@ -47,12 +48,13 @@ export const OPS = {
   find: ["read", "[tab=<id>] text=<text> [max=<count>]", "elements whose own text contains the text"],
   attr: ["read", "[tab=<id>] selector=<css> name=<attribute>", "one attribute of one element"],
   storage: ["read", "[tab=<id>] [kind=local|session]", "the page's localStorage or sessionStorage"],
-  screenshot: ["read", "[tab=<id>] [full=true] [out=<file.png>]", "picture of the visible part of the page, or of all of it; in the agent profile the tab need not be showing"],
+  screenshot: ["read", "[tab=<id>] [full=true | x= y= width= height= | selector=<css> | scroller=<css> [y=] [height=]] [scroll=<px>|bottom] [scrollx=<px>] [viewport=<w>x<h>] [mobile=true] [scale=<0.1..4>] [format=png|jpeg|webp] [quality=<1..100>] [delay=<ms>] [out=<file>]", "picture of the visible part, the whole page, an area, one element or a box that scrolls on its own; scroll, page size, picture scale and format chosen; in the agent profile the tab need not be showing"],
 
   click: ["act", "[tab=<id>] selector=<css> | text=<visible text> | x=<px> y=<px> [real=true]", "click an element or a point of the page"],
   mouse: ["act", "[tab=<id>] x=<px> y=<px> [action=click|double|right|move|down|up]", "real mouse input at a point of the page (agent profile)"],
   type: ["act", "[tab=<id>] selector=<css> text=<what to type> [submit=true] [real=true]", "fill a field"],
   press: ["act", "[tab=<id>] key=<Enter|Tab|Escape|ArrowDown|a...> [selector=<css>] [real=true]", "send a key to an element or the focused one"],
+  login: ["act", "[tab=<id>] [username=<which one>] [submit=false]", "sign in on this https page with the owner's saved login for its site; the agent never sees it (the owner allows it once, and adds logins in Settings > Agents)"],
   select: ["act", "[tab=<id>] selector=<css> value=<option value or label>", "choose an option in a select"],
   check: ["act", "[tab=<id>] selector=<css> [on=false]", "tick or untick a checkbox or radio"],
   hover: ["act", "[tab=<id>] selector=<css>", "move the pointer over an element"],
@@ -63,8 +65,8 @@ export const OPS = {
   "wait-load": ["act", "[tab=<id>] [ms=<timeout>]", "wait until the tab has finished loading"],
   eval: ["act", "[tab=<id>] code=<javascript> [real=true]", "run code in the page and return its value; in the agent profile it also works on sites that forbid eval and waits for promises"],
 
-  downloads: ["downloads", "[limit=<n>] [state=in_progress|complete|interrupted]", "the download list"],
-  download: ["downloads", "url=<address> [filename=<relative path>] [wait=true]", "start a download"],
+  downloads: ["downloads", "[limit=<n>] [state=downloading|paused|done|error]", "the download list: Gamblium's downloader's jobs (and the browser's, for blob:/data:)"],
+  download: ["downloads", "url=<address> [filename=<relative path>] [wait=true]", "start a download in Gamblium's downloader (blob:/data: go to the browser)"],
   "download-wait": ["downloads", "id=<download id> [ms=<timeout>]", "wait until a download finishes"],
   "download-pause": ["downloads", "id=<download id>", "pause"],
   "download-resume": ["downloads", "id=<download id>", "resume"],
@@ -544,57 +546,225 @@ function realEval(tabId, code) {
   });
 }
 
-// A picture without showing the tab. full: the whole page, not only what is visible.
-function realScreenshot(tabId, full) {
+// What an agent may ask of a picture (owner, Nov 14 2026: "through the CLI we control the
+// area, the scroll, anything we want from the screenshot engine"). Checked here, before the
+// tab is touched; the answer names what was wrong.
+//   full=true                      the whole page
+//   x= y= width= height=           an area of the page (CSS px, from the top left of the page)
+//   selector=<css>                 one element, all of it, also where it runs beyond the window
+//   scroller=<css> [y=] [height=]  a box that scrolls on its own (a chat, a mail list): its content
+//                                  from row y, height rows (all of it by default), joined
+//   scroll=<px>|bottom scrollx=<px> scroll the page first (and leave it there)
+//   viewport=<w>x<h> mobile=true   the page laid out at this size (a phone: 390x844 mobile=true)
+//   scale=<0.1..4>                 picture size against the page's CSS pixels (0.5: half as wide)
+//   format=png|jpeg|webp quality=<1..100>   jpeg and webp are much smaller; one picture only
+//   delay=<ms>                     wait before taking it (animations, late content), up to 10 s
+export function shotOptions(c) {
+  const o = { full: c.full === true, mobile: c.mobile === true };
+  const num = (k, min, max) => {
+    if (c[k] === undefined) return undefined;
+    const n = Number(c[k]);
+    if (!Number.isFinite(n) || n < min || n > max) throw new Error(`${k} must be a number from ${min} to ${max}`);
+    return n;
+  };
+  const area = ["x", "y", "width", "height"].filter((k) => c[k] !== undefined);
+  if (c.scroller !== undefined) {
+    o.scroller = String(c.scroller);
+    o.from = num("y", 0, 1e7) ?? 0;
+    o.rows = num("height", 1, 1e7) ?? null;
+  } else if (area.length) {
+    if (area.length < 4) throw new Error("an area needs all four: x= y= width= height= (CSS pixels of the page)");
+    o.area = { x: num("x", 0, 1e6), y: num("y", 0, 1e7), width: num("width", 1, 1e5), height: num("height", 1, 1e7) };
+  }
+  if (c.selector !== undefined) o.selector = String(c.selector);
+  const picked = [o.full, !!o.area, !!o.selector, !!o.scroller].filter(Boolean).length;
+  if (picked > 1) throw new Error("pick one of full=true, an area (x y width height), selector= or scroller=");
+  if (c.scroll !== undefined) {
+    if (String(c.scroll) === "bottom") o.scrollY = "bottom";
+    else o.scrollY = num("scroll", 0, 1e7);
+  }
+  o.scrollX = num("scrollx", 0, 1e6);
+  if (c.viewport !== undefined) {
+    const m = /^(\d{2,5})\s*[x*]\s*(\d{2,5})$/i.exec(String(c.viewport));
+    if (!m) throw new Error("viewport must be WIDTHxHEIGHT, such as 1280x800 or 390x844");
+    const [w, h] = [Number(m[1]), Number(m[2])];
+    if (w < 200 || w > 4000 || h < 200 || h > 16000) throw new Error("viewport: width 200 to 4000, height 200 to 16000");
+    o.viewport = { width: w, height: h };
+  }
+  o.scale = num("scale", 0.1, 4) ?? 1;
+  const format = c.format === undefined ? "png" : String(c.format).toLowerCase().replace("jpg", "jpeg");
+  if (!["png", "jpeg", "webp"].includes(format)) throw new Error("format must be png, jpeg or webp");
+  o.format = format;
+  o.quality = num("quality", 1, 100);
+  if (o.quality !== undefined && format === "png") throw new Error("quality is for format=jpeg or webp");
+  o.delay = num("delay", 0, 10000) ?? 0;
+  for (const k of Object.keys(o)) if (o[k] === undefined) delete o[k];
+  return o;
+}
+
+/** What a picture's options say in an answer, so an agent sees what it got. */
+const shotParams = (o) => ({ format: o.format, ...(o.quality !== undefined ? { quality: Math.round(o.quality) } : {}) });
+
+// In the page: elements that stay put on screen hidden for the slices after the first, and back.
+const HIDE_FIXED = `(() => { let n = 0; for (const el of document.querySelectorAll("body *")) { const p = getComputedStyle(el).position; if ((p === "fixed" || p === "sticky") && el.style.visibility !== "hidden") { el.dataset.gambliumShotHidden = el.style.visibility || "-"; el.style.visibility = "hidden"; n++; } } return n; })()`;
+const SHOW_FIXED = `(() => { for (const el of document.querySelectorAll("[data-gamblium-shot-hidden]")) { const v = el.dataset.gambliumShotHidden; el.style.visibility = v === "-" ? "" : v; delete el.dataset.gambliumShotHidden; } })()`;
+
+// A picture without showing the tab, as shotOptions describes. Everything is taken from inside
+// the page's visible area, which is made to hold it (the browser does not draw beyond the
+// window for hidden and minimised pages: tester, #234); the page is scrolled to each part and
+// put back where it was unless scroll= was asked for.
+function realScreenshot(tabId, o) {
   return withDebugger(tabId, async (send) => {
-    const params = { format: "png" };
-    await lendViewport(send);
-    if (full) {
-      // The whole page, in slices: the browser draws at most 16000 px in one go (a taller
-      // picture came back cut at 16000 with ok: true; tester, Nov 14 2026). Each slice is a clip
-      // of the page beyond the viewport; the program joins them (out=). Pages taller than
-      // FULL_MAX are cut there, and say so.
+    const evalIn = async (expression) => {
+      const r = await send("Runtime.evaluate", { expression, returnByValue: true });
+      if (r.exceptionDetails) throw new Error((r.exceptionDetails.exception && r.exceptionDetails.exception.description) || r.exceptionDetails.text);
+      return r.result.value;
+    };
+    const view = async () => {
       const m = await send("Page.getLayoutMetrics");
+      const v = m.cssLayoutViewport || m.layoutViewport;
       const size = m.cssContentSize || m.contentSize;
-      const view = m.cssLayoutViewport || m.layoutViewport;
-      const width = Math.max(1, Math.round(view.clientWidth || LENT.width));
-      const pageHeight = Math.max(1, Math.ceil(size.height));
-      const height = Math.min(pageHeight, FULL_MAX);
-      const viewport = (h) => send("Emulation.setDeviceMetricsOverride", { width, height: h, deviceScaleFactor: 1, mobile: false });
-      // Up to one drawing's limit: the page made as tall as its content, one picture (as before).
-      // Clips beyond the viewport never answered on hidden and minimised pages (tester, #234).
-      if (height <= FULL_SLICE * 2) {
-        await viewport(height);
-        const shot = await send("Page.captureScreenshot", params);
-        return { ok: true, real: true, tab: tabId, dataUrl: "data:image/png;base64," + shot.data, pageHeight, capturedHeight: height, truncated: false };
-      }
-      // Taller. A real window cannot draw a viewport over about 16000 px (the picture never
-      // answers), and when minimised a scroll draws no new frame; tried: scrolling, a resize after
-      // each scroll, the emulated visible area. So in a window a taller page gives its top 16000 px
-      // and says truncated.
-      if (!/Headless/.test(navigator.userAgent)) {
-        const top = FULL_SLICE * 2;
-        await viewport(top);
-        const shot = await send("Page.captureScreenshot", params);
-        return { ok: true, real: true, tab: tabId, dataUrl: "data:image/png;base64," + shot.data, pageHeight, capturedHeight: top, truncated: true, hint: "in a window a picture stops at 16000 px; hide the session (gamblium-cli hide) for the whole page" };
-      }
-      // With no window: a viewport one slice tall, the page scrolled to each slice in turn; the
-      // last slice's viewport is what is left, so it ends exactly at the bottom. (A viewport as tall
-      // as the whole page worked on a plain test page but ended the browser on a real 54000 px
-      // article: tester, Nov 14 2026. One slice at a time keeps the drawing small.)
-      const parts = [];
-      for (let y = 0; y < height; y += FULL_SLICE) {
-        const h = Math.min(FULL_SLICE, height - y);
-        await viewport(h);
-        await send("Runtime.evaluate", { expression: `window.scrollTo(0, ${y}); new Promise((r) => setTimeout(r, 60))`, awaitPromise: true });
-        const shot = await send("Page.captureScreenshot", params);
-        parts.push("data:image/png;base64," + shot.data);
-      }
-      await send("Runtime.evaluate", { expression: "window.scrollTo(0, 0)" });
-      return { ok: true, real: true, tab: tabId, parts, pageHeight, capturedHeight: height, truncated: height < pageHeight };
+      return { vw: Math.round(v.clientWidth), vh: Math.round(v.clientHeight), pageWidth: Math.ceil(size.width), pageHeight: Math.ceil(size.height) };
+    };
+    const setViewport = (width, height) => send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: o.mobile });
+    // Waits happen here, never in the page: a page with no window draws no frames and its own
+    // timers are held back, so a wait inside it did not end within 8 s.
+    const scrollTo = async (x, y) => {
+      await evalIn(`window.scrollTo(${x}, ${y})`);
+      await sleepMs(80);
+      return evalIn("[scrollX, scrollY]");
+    };
+    const picture = (clip, fmt = o.format) => send("Page.captureScreenshot", {
+      format: fmt, ...(fmt !== "png" && o.quality !== undefined ? { quality: Math.round(o.quality) } : {}),
+      ...(clip ? { clip: { ...clip, scale: o.scale } } : {}),
+    });
+    const url = (fmt, data) => `data:image/${fmt};base64,${data}`;
+    const out = (w, h) => ({ width: Math.round(w * o.scale), height: Math.round(h * o.scale) });
+
+    // The size the page is laid out at. Always given back at the end: in a session with no
+    // window it outlived the debugger (the next picture came out 6800 px tall).
+    try {
+      return await shoot();
+    } finally {
+      await send("Emulation.clearDeviceMetricsOverride").catch(() => {});
     }
-    const shot = await send("Page.captureScreenshot", params);
-    return { ok: true, real: true, tab: tabId, dataUrl: "data:image/png;base64," + shot.data };
+    async function shoot() {
+    let lent = null;
+    if (o.viewport) await setViewport(o.viewport.width, o.viewport.height);
+    else lent = await lendViewport(send);
+    let v = await view();
+    const [x0, y0] = await evalIn("[scrollX, scrollY]");
+    if (o.scrollY !== undefined || o.scrollX !== undefined) {
+      const y = o.scrollY === "bottom" ? "document.scrollingElement.scrollHeight" : o.scrollY ?? y0;
+      await evalIn(`window.scrollTo(${o.scrollX ?? x0}, ${y})`);
+    }
+    if (o.delay) await sleepMs(o.delay);
+    const keepScroll = o.scrollY !== undefined || o.scrollX !== undefined;
+    const base = { ok: true, real: true, tab: tabId, ...shotParams(o), viewport: `${v.vw}x${v.vh}`, ...(lent ? { lent } : {}) };
+
+    // A box that scrolls on its own: its content, step by step, joined by the program (out=).
+    if (o.scroller) {
+      // The box where it really is, with the page unscrolled (a sticky header covered its top
+      // when it was scrolled into view); a box deeper than 16000 px is brought into view.
+      const at = await evalIn(`(() => { const el = document.querySelector(${JSON.stringify(o.scroller)}); if (!el) return null; const r = el.getBoundingClientRect(); return r.bottom + scrollY; })()`);
+      if (at !== null && at <= FULL_SLICE * 2) {
+        if (at > v.vh) await setViewport(v.vw, Math.ceil(at));
+        await scrollTo(0, 0);
+      }
+      const box = await evalIn(`(() => { const el = document.querySelector(${JSON.stringify(o.scroller)}); if (!el) return null;
+        if (${at === null ? "true" : at > FULL_SLICE * 2}) el.scrollIntoView({ block: "center" }); const r = el.getBoundingClientRect();
+        return { left: r.left + el.clientLeft + scrollX, top: r.top + el.clientTop + scrollY, width: el.clientWidth, height: el.clientHeight, scrollTop: el.scrollTop, maxScroll: el.scrollHeight - el.clientHeight, scrollHeight: el.scrollHeight }; })()`);
+      if (!box) return { ok: false, error: `no element matches scroller=${o.scroller}` };
+      if (box.width < 1 || box.height < 1) return { ok: false, error: "that box takes no room on the page" };
+      const end = Math.min(box.scrollHeight, o.from + (o.rows ?? box.scrollHeight), o.from + 100000);
+      const steps = partsForScroller(o.from, end, box.height, box.maxScroll);
+      const sel = JSON.stringify(o.scroller);
+      const parts = [];
+      try {
+        for (const s of steps) {
+          await evalIn(`document.querySelector(${sel}).scrollTop = ${s.scroll}`);
+          await sleepMs(100);
+          const actual = await evalIn(`document.querySelector(${sel}).scrollTop`);
+          const offset = s.start - actual;
+          const rows = Math.min(s.end - s.start, box.height - offset);
+          if (rows <= 0) continue;
+          const shot = await picture({ x: box.left, y: box.top + offset, width: box.width, height: rows }, "png");
+          parts.push(url("png", shot.data));
+        }
+      } finally {
+        await evalIn(`(() => { const el = document.querySelector(${sel}); if (el) el.scrollTop = ${box.scrollTop}; })()`).catch(() => {});
+      }
+      return { ...base, format: "png", ...(parts.length === 1 ? { dataUrl: parts[0] } : { parts }), region: { scroller: o.scroller, from: o.from, rows: end - o.from }, ...out(box.width, end - o.from), truncated: end < Math.min(box.scrollHeight, o.from + (o.rows ?? box.scrollHeight)) };
+    }
+
+    // The region of the page wanted, in page coordinates; null: what is visible.
+    let region = null;
+    if (o.full) region = { x: 0, y: 0, width: v.vw, height: Math.min(v.pageHeight, FULL_MAX) };
+    else if (o.area) region = { ...o.area };
+    else if (o.selector) {
+      const r = await evalIn(`(() => { const el = document.querySelector(${JSON.stringify(o.selector)}); if (!el) return null; const b = el.getBoundingClientRect(); return { x: b.left + scrollX, y: b.top + scrollY, width: b.width, height: b.height }; })()`);
+      if (!r) return { ok: false, error: `no element matches selector=${o.selector}` };
+      if (r.width < 1 || r.height < 1) return { ok: false, error: "that element takes no room on the page (hidden?)" };
+      region = { x: Math.floor(r.x), y: Math.floor(r.y), width: Math.ceil(r.width), height: Math.ceil(r.height) };
+    }
+    if (!region) {
+      const [sx, sy] = await evalIn("[scrollX, scrollY]");
+      const shot = await picture(o.scale !== 1 ? { x: sx, y: sy, width: v.vw, height: v.vh } : null);
+      return { ...base, dataUrl: url(o.format, shot.data), ...out(v.vw, v.vh), region: { x: sx, y: sy, width: v.vw, height: v.vh } };
+    }
+    region.width = Math.min(region.width, Math.max(1, v.pageWidth - region.x));
+    region.height = Math.min(region.height, Math.max(1, v.pageHeight - region.y));
+    if (region.x >= v.pageWidth || region.y >= v.pageHeight) return { ok: false, error: `the page is ${v.pageWidth} x ${v.pageHeight}: that area lies outside it` };
+    // Wider than the page is laid out: what lies beyond its width is not there to take.
+    const width = Math.min(region.width, Math.max(1, v.vw - region.x));
+
+    // A picture's clip is measured from the top left of the page. The browser draws only what
+    // the visible area holds (hidden and minimised pages: tester, #234), so:
+    // - a region within the first 16000 px: the visible area is made tall enough to hold it with
+    //   the page unscrolled, one picture, sticky headers where they really are;
+    // - deeper or taller: the visible area one slice tall, scrolled to each slice in turn.
+    const bottom = region.y + region.height;
+    const parts = [];
+    let cut = false;
+    let got = 0;
+    try {
+      if (bottom <= FULL_SLICE * 2) {
+        if (bottom > v.vh) {
+          await setViewport(v.vw, bottom);
+          v = await view();
+        }
+        await scrollTo(0, 0);
+        const shot = await picture({ x: region.x, y: region.y, width, height: region.height });
+        parts.push(shot.data);
+        got = region.height;
+      } else {
+        await setViewport(v.vw, FULL_SLICE);
+        v = await view();
+        for (let at = 0; at < region.height; at += FULL_SLICE) {
+          const top = region.y + at;
+          // From the second slice on, what stays put on screen (sticky headers, fixed bars) is
+          // hidden, or it is drawn again at the top of every slice over the page below it.
+          if (at > 0 && at === FULL_SLICE) await evalIn(HIDE_FIXED);
+          const [, sy] = await scrollTo(0, top);
+          const rows = Math.min(FULL_SLICE, region.height - at, sy + v.vh - top);
+          if (rows <= 0) { cut = true; break; }
+          const shot = await picture({ x: region.x, y: top, width, height: rows }, "png");
+          parts.push(shot.data);
+          got += rows;
+          // A window cannot draw a visible area over about 16000 px of page: the rest of a
+          // taller one comes only with no window (gamblium-cli hide).
+          if (!/Headless/.test(navigator.userAgent) && top + rows >= FULL_SLICE * 2 && at + rows < region.height) { cut = true; break; }
+        }
+      }
+    } finally {
+      await evalIn(SHOW_FIXED).catch(() => {});
+      if (!keepScroll) await evalIn(`window.scrollTo(${x0}, ${y0})`).catch(() => {});
+    }
+    const fmt = parts.length === 1 ? o.format : "png";
+    const answer = { ...base, format: fmt, region: { ...region, width }, ...out(width, got), pageHeight: v.pageHeight, truncated: cut || got < region.height };
+    if (cut && !/Headless/.test(navigator.userAgent)) answer.hint = "in a window a picture stops at 16000 px; hide the session (gamblium-cli hide) for the whole of it";
+    return parts.length === 1 ? { ...answer, dataUrl: url(fmt, parts[0]) } : { ...answer, parts: parts.map((p) => url("png", p)) };
+    }
   });
 }
 
@@ -767,6 +937,41 @@ async function wake(tab) {
   return waitLoaded(tab.id, 15000);
 }
 
+/** In the page: fills the sign-in form (the visible password field and the user name field
+ *  before it) and submits it. Nothing is returned but what was done. */
+function pageLogin(user, pass, submit) {
+  const visible = (e) => !!e && e.offsetParent !== null && !e.disabled && !e.readOnly;
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+  const put = (e, v) => {
+    e.focus();
+    setter.call(e, v);
+    e.dispatchEvent(new Event("input", { bubbles: true }));
+    e.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  const userSel = 'input[type=email], input[autocomplete~=username], input[name*=user i], input[name*=login i], input[name*=email i], input[id*=user i], input[id*=email i], input[id*=login i], input[type=text], input:not([type])';
+  const pw = [...document.querySelectorAll("input[type=password]")].find(visible) || null;
+  let u = null;
+  if (pw) {
+    const scope = pw.form || document;
+    u = [...scope.querySelectorAll(userSel)].filter(visible).filter((e) => e.compareDocumentPosition(pw) & Node.DOCUMENT_POSITION_FOLLOWING).pop() || null;
+  } else {
+    u = [...document.querySelectorAll(userSel)].find(visible) || null;
+  }
+  if (!pw && !u) return { ok: false, error: "no sign-in form on this page" };
+  if (u && user) put(u, user);
+  if (pw) put(pw, pass);
+  if (submit) {
+    const field = pw || u;
+    const form = field.form;
+    const buttons = [...(form || document).querySelectorAll('button, input[type=submit], [role=button]')].filter(visible);
+    const btn = buttons.find((b) => b.type === "submit" && form) || buttons.find((b) => /^(log ?in|sign ?in|next|continue|submit)$/i.test((b.textContent || b.value || "").trim()));
+    if (btn) btn.click();
+    else if (form) form.requestSubmit ? form.requestSubmit() : form.submit();
+    else field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
+  }
+  return { ok: true, step: pw ? "password" : "username" };
+}
+
 async function inPage(tab, func, args, world) {
   tab = await wake(tab);
   const run = chrome.scripting.executeScript({ target: { tabId: tab.id }, func, args, ...(world ? { world } : {}) });
@@ -776,6 +981,10 @@ async function inPage(tab, func, args, world) {
     result = await Promise.race([run, timeout]);
   } catch (e) {
     const msg = errText(e);
+    if (/permission|Cannot access/i.test(msg) && !/^https?:/i.test(tab.url || tab.pendingUrl || "")) {
+      // No extension may script these, in any profile (tester, Nov 14 2026: the advice below was wrong for them).
+      return { ok: false, error: "this kind of page (data:, chrome:, file:, the Web Store, other extensions) cannot be scripted by an extension; open its content from an http(s) address. (" + msg + ")" };
+    }
     if (/permission|Cannot access/i.test(msg)) {
       return { ok: false, needsPageAccess: true, error: "Gamblium may not look at this page. Use a named session (gamblium-cli), or ask the person to switch on Settings > Agents > \"Let command-line agents control this profile\". (" + msg + ")" };
     }
@@ -862,6 +1071,13 @@ export function makeCtl(deps) {
   const idMaps = async () => (deps.idMaps ? deps.idMaps() : null);
   if (deps.idMaps) idNow = async (id) => followId(await deps.idMaps(), id);
   if (deps.lastUrl) lastUrlOf = (id) => deps.lastUrl(id);
+  // Gamblium's downloader's ids are 16 hex characters; the browser's are numbers.
+  const ownId = (id) => /^[0-9a-f]{16}$/.test(String(id));
+  const ownDo = async (id, action) => {
+    const r = await deps.ownAction(String(id), action);
+    return r && r.ok === false ? { ok: false, error: r.error || "failed" } : { ok: true, id: String(id), engine: "gamblium" };
+  };
+
   const handlers = {
     // ---- browser
     help: async () => ({ ok: true, ops: Object.fromEntries(Object.entries(OPS).map(([k, [group, args, about]]) => [k, { group, args, about }])) }),
@@ -1042,13 +1258,20 @@ export function makeCtl(deps) {
     storage: async (c) => inPage(await resolveTab(c.tab), pageStorage, [c.kind === "session" ? "session" : "local"]),
     screenshot: async (c) => {
       const t = await resolveTab(c.tab);
+      let o;
+      try {
+        o = shotOptions(c);
+      } catch (e) {
+        return { ok: false, error: errText(e) };
+      }
+      const plain = !o.full && !o.area && !o.selector && !o.scroller && o.scrollY === undefined && o.scrollX === undefined && !o.viewport && o.scale === 1 && o.format === "png" && !o.delay;
       if (chrome.debugger) {
         // No need to show the tab; works minimised and with no window.
         await wake(t);
-        const shot = await realScreenshot(t.id, c.full === true);
-        if (shot.ok || c.full === true) return shot;
-      } else if (c.full === true) {
-        return { ok: false, needsAgentProfile: true, error: "a picture of the whole page needs the agent profile: gamblium launch --agent" };
+        const shot = await realScreenshot(t.id, o);
+        if (shot.ok || !plain) return shot;
+      } else if (!plain) {
+        return { ok: false, needsAgentProfile: true, error: "these picture options need the agent profile: gamblium launch --agent (or a named session)" };
       }
       if (!t.active) {
         await chrome.tabs.update(t.id, { active: true });
@@ -1098,6 +1321,35 @@ export function makeCtl(deps) {
         if (!focused || focused.ok === false) return focused;
       }
       return realKey(t.id, String(c.key));
+    },
+    // The owner's saved login, typed into this page without the agent seeing it (logins.rs).
+    login: async (c) => {
+      const t = await resolveTab(c.tab);
+      let host = "";
+      try { host = new URL(t.url).hostname; } catch { /* not a web page */ }
+      // https only; plain http only on this computer (local test sites).
+      if (!host || !(/^https:/i.test(t.url || "") || /^(localhost|127\.0\.0\.1|\[::1\])$/.test(host))) return { ok: false, error: "log in only on an https page: open the site's sign-in page first" };
+      const r = await deps.native({ type: "login-fill", host, ...(c.username ? { username: String(c.username) } : {}) });
+      if (!r || r.ok === false) return { ok: false, error: (r && r.error) || "the helper did not answer" };
+      if (r.allowed === false) {
+        return { ok: false, needsPermission: true, error: r.asked ? "the owner was asked to let agents use saved logins; try again once they have answered" : "agents may not use saved logins; the owner allows it in their own Gamblium (Settings > Agents)" };
+      }
+      if (r.none) return { ok: false, error: `no saved login for ${host}; the owner adds one in their own Gamblium, Settings > Agents` };
+      const submit = c.submit !== false;
+      let done = await inPage(t, pageLogin, [r.username, r.password, submit]);
+      // Sign-in in two steps (the name first, then the password on the next screen).
+      if (done && done.ok && done.step === "username" && submit) {
+        for (let i = 0; i < 16; i++) {
+          await sleepMs(600);
+          const has = await inPage(t, () => [...document.querySelectorAll("input[type=password]")].some((e) => e.offsetParent !== null), []).catch(() => false);
+          if (has === true) {
+            done = await inPage(t, pageLogin, ["", r.password, true]);
+            break;
+          }
+        }
+      }
+      if (!done || done.ok === false) return { ok: false, site: r.site, error: (done && done.error) || "could not fill the sign-in form" };
+      return { ok: true, site: r.site, filled: done.step === "password" ? "user name and password" : "user name only (no password field appeared)", submitted: submit };
     },
     select: async (c) => {
       need(c, "selector", "value");
@@ -1151,19 +1403,49 @@ export function makeCtl(deps) {
     },
 
     // ---- downloads
+    // Every download goes through Gamblium's downloader (owner, Nov 14 2026); only what the
+    // browser alone can fetch (blob:, data:) is the browser's, and the answer says so
+    // (engine: "browser"). Our ids are 16 hex characters, the browser's are numbers.
     downloads: async (c) => {
-      let items = await deps.downloadsList(Number(c.limit) || 50);
+      const limit = Number(c.limit) || 50;
+      const ours = (await deps.ownJobs()).map((j) => ({ ...j, engine: "gamblium" }));
+      const browser = (await deps.downloadsList(limit)).map((d) => ({
+        id: d.id, engine: "browser", url: d.url, path: d.filename, name: String(d.filename || "").split(/[\\/]/).pop(),
+        state: d.state === "complete" ? "done" : d.state === "interrupted" ? "error" : d.paused ? "paused" : "downloading",
+        done: d.bytesReceived, size: d.totalBytes, error: d.error,
+      }));
+      let items = [...ours, ...browser];
       if (c.state) items = items.filter((d) => d.state === c.state);
-      return { ok: true, downloads: items };
+      return { ok: true, downloads: items.slice(0, limit) };
     },
     download: async (c) => {
       need(c, "url");
-      const id = await chrome.downloads.download({ url: c.url, ...(c.filename ? { filename: String(c.filename), conflictAction: "uniquify" } : {}) });
-      if (c.wait) return handlers["download-wait"]({ id, ms: c.ms });
-      return { ok: true, id };
+      const url = String(c.url);
+      if (/^https?:\/\//i.test(url)) {
+        const r = await deps.ownDownload(url, c.filename);
+        if (!r || r.ok === false || !r.download) return { ok: false, error: (r && r.error) || "Gamblium's downloader did not start" };
+        if (c.wait) return handlers["download-wait"]({ id: r.download, ms: c.ms });
+        return { ok: true, id: r.download, engine: "gamblium" };
+      }
+      const id = await chrome.downloads.download({ url, ...(c.filename ? { filename: String(c.filename), conflictAction: "uniquify" } : {}) });
+      const note = "a blob: or data: address is fetched by the browser itself";
+      if (c.wait) return { ...(await handlers["download-wait"]({ id, ms: c.ms })), engine: "browser", note };
+      return { ok: true, id, engine: "browser", note };
     },
     "download-wait": async (c) => {
       need(c, "id");
+      if (ownId(c.id)) {
+        const end = Date.now() + (Number(c.ms) || 25000);
+        for (;;) {
+          const j = (await deps.ownJobs()).find((x) => x.id === String(c.id));
+          if (!j) return { ok: false, error: "no download " + c.id };
+          if (j.state === "done") return { ok: true, download: j };
+          if (j.state === "error") return { ok: false, download: j, error: "the download failed: " + (j.error || "error") };
+          if (j.state === "paused") return { ok: false, download: j, error: "the download is paused; download-resume continues it" };
+          if (Date.now() >= end) return { ok: false, download: j, error: "still downloading; ask again with download-wait" };
+          await sleepMs(500);
+        }
+      }
       const end = Date.now() + (Number(c.ms) || 25000);
       for (;;) {
         const [d] = await chrome.downloads.search({ id: c.id });
@@ -1175,12 +1457,13 @@ export function makeCtl(deps) {
         await sleepMs(300);
       }
     },
-    "download-pause": async (c) => (need(c, "id"), deps.downloadsAction(c.id, "pause")),
-    "download-resume": async (c) => (need(c, "id"), deps.downloadsAction(c.id, "resume")),
-    "download-cancel": async (c) => (need(c, "id"), deps.downloadsAction(c.id, "cancel")),
-    "download-erase": async (c) => (need(c, "id"), deps.downloadsAction(c.id, "erase")),
+    "download-pause": async (c) => (need(c, "id"), ownId(c.id) ? ownDo(c.id, "pause") : deps.downloadsAction(c.id, "pause")),
+    "download-resume": async (c) => (need(c, "id"), ownId(c.id) ? ownDo(c.id, "resume") : deps.downloadsAction(c.id, "resume")),
+    "download-cancel": async (c) => (need(c, "id"), ownId(c.id) ? ownDo(c.id, "cancel") : deps.downloadsAction(c.id, "cancel")),
+    "download-erase": async (c) => (need(c, "id"), ownId(c.id) ? ownDo(c.id, "remove") : deps.downloadsAction(c.id, "erase")),
     "download-delete": async (c) => {
       need(c, "id");
+      if (ownId(c.id)) return ownDo(c.id, "delete");
       await chrome.downloads.removeFile(c.id).catch(() => {}); // already gone is fine
       await chrome.downloads.erase({ id: c.id });
       return { ok: true };

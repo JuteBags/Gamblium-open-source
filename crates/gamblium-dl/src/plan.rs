@@ -37,15 +37,38 @@ pub fn content_range(text: &str) -> Option<(u64, u64, Option<u64>)> {
 ///
 /// It starts with one. While doubling keeps raising the speed by a real
 /// margin it doubles again; the first doubling that does not pay is undone
-/// and the count stays there. A server that pushes back (429, 503, resets)
+/// and the count rests there. A server that pushes back (429, 503, resets)
 /// halves the count, and the count never again rises above that.
+///
+/// Resting is not for good (owner, Nov 14 2026: one bad window must not fix the count for the
+/// whole download). It tries one more doubling again after 13 windows (about 30 s), and each
+/// try that does not pay doubles that wait (1, 2, 4, then 8 minutes at most); a try that pays
+/// starts the waits over. It tries early, but never within 13 windows of the last try, when the
+/// speed has stayed under 3/4 of the resting speed for 3 windows (the server or the line
+/// changed). Each rest takes the speed of the moment as its new level, so a line that is simply
+/// slower now is not tried again and again.
 #[derive(Debug)]
 pub struct Adaptive {
     pub conns: usize,
     max: usize,
     before: Option<(usize, f64)>,
     settled: bool,
+    /// Tries in a row that did not pay; the wait before the next is `RETRY << (misses - 1)`.
+    misses: u32,
+    /// Windows since the count last came to rest.
+    resting: u32,
+    /// Speed when it came to rest, and windows in a row since then well below it.
+    level: f64,
+    low: u32,
+    /// A doubling k -> 2k did not pay and k + k/2 is being tried, so the count lands between
+    /// two powers of two when that is where the most speed is (6 rather than 4 or 8).
+    between: bool,
 }
+
+/// Windows (about 2.3 s each) to rest before trying one more doubling.
+const RETRY: u32 = 13;
+/// The wait doubles at most this many times: 13 << 4 windows is about 8 minutes.
+const MAX_MISSES: u32 = 4;
 
 /// A doubling must raise the speed by this factor to be kept. At 1.2 a
 /// fast server settled on 4 connections at 9.8 MiB/s where 16 gave 11
@@ -54,35 +77,128 @@ const WORTH_IT: f64 = 1.08;
 
 impl Adaptive {
     pub fn new(max: usize) -> Self {
-        Adaptive { conns: 1, max: max.max(1), before: None, settled: max <= 1 }
+        Adaptive { conns: 1, max: max.max(1), before: None, settled: max <= 1, misses: 0, resting: 0, level: 0.0, low: 0, between: false }
+    }
+
+    /// Starts at a count that was found before for this server (or asked for), resting there:
+    /// no doubling from it straight away, the usual tries 30 s later.
+    pub fn starting_at(max: usize, n: usize) -> Self {
+        let mut a = Self::new(max);
+        if n > 1 {
+            a.conns = n.min(a.max);
+            a.settled = true;
+            a.misses = 1;
+        }
+        a
+    }
+
+    /// Not in the middle of a try.
+    pub fn at_rest(&self) -> bool {
+        self.settled
+    }
+
+    /// The highest count shown to pay so far: the current one at rest, else the one before the
+    /// try under way. Remembered when a download ends before the count came to rest.
+    pub fn proven(&self) -> usize {
+        if self.settled { self.conns } else { self.before.map_or(self.conns, |b| b.0) }
+    }
+
+    fn rest(&mut self, conns: usize, level: f64) -> usize {
+        self.conns = conns;
+        self.settled = true;
+        self.before = None;
+        self.resting = 0;
+        self.level = level;
+        self.low = 0;
+        conns
     }
 
     /// `speed`: bytes per second over the last window at the current count.
     pub fn step(&mut self, speed: f64, pushed_back: bool) -> usize {
         if pushed_back {
-            self.conns = (self.conns / 2).max(1);
-            self.max = self.conns;
-            self.settled = true;
-            return self.conns;
+            let half = (self.conns / 2).max(1);
+            self.max = half;
+            return self.rest(half, 0.0);
         }
         if self.settled {
-            return self.conns;
-        }
-        if let Some((prev, prev_speed)) = self.before {
-            if speed < prev_speed * WORTH_IT {
-                self.conns = prev;
-                self.settled = true;
+            // Nothing more to try: at the limit, or a server that pushed back.
+            if self.conns >= self.max {
                 return self.conns;
+            }
+            self.resting += 1;
+            if self.level == 0.0 {
+                self.level = speed;
+            }
+            self.low = if speed < self.level * 0.75 { self.low + 1 } else { 0 };
+            let due = self.resting >= RETRY << self.misses.saturating_sub(1).min(MAX_MISSES);
+            let changed = self.low >= 3 && self.resting >= RETRY;
+            if !(due || changed) {
+                return self.conns;
+            }
+            self.settled = false;
+        } else if let Some((prev, prev_speed)) = self.before {
+            if speed < prev_speed * WORTH_IT {
+                if !self.between && prev >= 2 && self.conns == prev * 2 {
+                    self.between = true;
+                    self.conns = prev + prev / 2;
+                    return self.conns;
+                }
+                self.between = false;
+                self.misses += 1;
+                return self.rest(prev, prev_speed);
+            }
+            self.misses = 0;
+            if self.between {
+                self.between = false;
+                return self.rest(self.conns, speed);
             }
         }
         if self.conns >= self.max {
-            self.settled = true;
-            return self.conns;
+            return self.rest(self.conns, speed);
         }
         self.before = Some((self.conns, speed));
         self.conns = (self.conns * 2).min(self.max);
         self.conns
     }
+}
+
+/// The site a host belongs to: its last two labels, three when the second-last is a short
+/// country-style label (`a.b.co.uk` -> `b.co.uk`). Good enough to group one company's servers.
+pub fn site_of(host: &str) -> &str {
+    let labels: Vec<&str> = host.split('.').collect();
+    if labels.len() <= 2 || host.parse::<std::net::IpAddr>().is_ok() {
+        return host;
+    }
+    let short = labels[labels.len() - 2].len() <= 3 && labels[labels.len() - 1].len() == 2;
+    let keep = if short { 3 } else { 2 }.min(labels.len());
+    let cut: usize = labels[..labels.len() - keep].iter().map(|l| l.len() + 1).sum();
+    &host[cut..]
+}
+
+/// Where to start a download from `host`, from the counts other downloads came to rest at
+/// (owner, Nov 14 2026: a new website must not cost a fresh search every time):
+/// 1. this very host;
+/// 2. another host of the same site (the newest);
+/// 3. once at least 3 servers are known, the count most of them came to (ties: the lower), as
+///    that mostly says how much the line itself carries.
+/// It is only a start: the count is still tried and corrected while the file arrives.
+pub fn first_guess(known: &[(String, usize)], host: &str) -> Option<usize> {
+    let clamp = |n: usize| n.clamp(1, 16);
+    if let Some((_, n)) = known.iter().find(|(h, _)| h == host) {
+        return Some(clamp(*n));
+    }
+    let site = site_of(host);
+    if let Some((_, n)) = known.iter().find(|(h, _)| site_of(h) == site) {
+        return Some(clamp(*n));
+    }
+    if known.len() < 3 {
+        return None;
+    }
+    let mut counts = std::collections::BTreeMap::new();
+    for (_, n) in known {
+        *counts.entry(clamp(*n)).or_insert(0) += 1;
+    }
+    counts.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0))).map(|(n, _)| n)
 }
 
 /// A file name that is safe on Windows, from a header or an address.
@@ -197,7 +313,105 @@ mod tests {
             a.step(s, false);
         }
         assert_eq!(a.conns, 16);
-        assert_eq!(a.step(8.3e6, false), 8);
+        // 16 does not pay: 12 is tried, does not pay either, back to 8.
+        assert_eq!(a.step(8.3e6, false), 12);
+        assert_eq!(a.step(8.2e6, false), 8);
+        // Where the most is between two powers of two, it lands there.
+        let mut a = Adaptive::new(16);
+        for s in [1.0e6, 2.0e6, 4.0e6] {
+            a.step(s, false);
+        }
+        assert_eq!(a.conns, 8);
+        assert_eq!(a.step(4.1e6, false), 6);
+        assert_eq!(a.step(5.0e6, false), 6);
+        assert_eq!(a.step(5.0e6, false), 6);
+    }
+
+    #[test]
+    fn a_try_that_did_not_pay_is_made_again_later_with_growing_waits() {
+        let mut a = Adaptive::new(16);
+        assert_eq!(a.step(10.0e6, false), 2);
+        assert_eq!(a.step(10.2e6, false), 1);
+        // Rests 13 windows, then tries 2 again.
+        let mut windows = 0;
+        while a.step(10.0e6, false) == 1 {
+            windows += 1;
+        }
+        assert_eq!(windows, RETRY as usize - 1);
+        assert_eq!(a.step(10.0e6, false), 1);
+        // Second miss: twice the wait.
+        let mut windows = 0;
+        while a.step(10.0e6, false) == 1 {
+            windows += 1;
+        }
+        assert_eq!(windows, 2 * RETRY as usize - 1);
+        // This time the second connection pays: kept, and the waits start over.
+        assert_eq!(a.step(14.0e6, false), 4);
+        assert_eq!(a.step(14.1e6, false), 3);
+        assert_eq!(a.step(14.0e6, false), 2);
+        let mut windows = 0;
+        while a.step(14.0e6, false) == 2 {
+            windows += 1;
+        }
+        assert_eq!(windows, RETRY as usize - 1, "one miss since the last gain");
+        assert_eq!(a.step(14.0e6, false), 3);
+        assert_eq!(a.step(14.0e6, false), 2);
+        // The wait never grows past 13 << 4 windows.
+        a.misses = 9;
+        let mut windows = 0;
+        while a.step(14.0e6, false) == 2 {
+            windows += 1;
+        }
+        assert_eq!(windows, (RETRY << MAX_MISSES) as usize - 1);
+    }
+
+    #[test]
+    fn a_drop_in_speed_brings_the_next_try_forward_once() {
+        let mut a = Adaptive::new(16);
+        a.step(10.0e6, false);
+        a.step(10.0e6, false);
+        for _ in 0..5 {
+            a.step(10.0e6, false);
+        }
+        a.misses = 3; // the next regular try would be minutes away
+        // The single connection falls to 4 MB/s: tried again once 13 windows have passed.
+        let mut windows = 0;
+        while a.step(4.0e6, false) == 1 {
+            windows += 1;
+        }
+        assert!(windows <= RETRY as usize, "{windows}");
+        // Not paying: back to one, resting at the new, lower level; no new early try at 4 MB/s.
+        assert_eq!(a.step(4.1e6, false), 1);
+        for _ in 0..(RETRY * 4) {
+            assert_eq!(a.step(4.0e6, false), 1);
+        }
+    }
+
+    #[test]
+    fn a_count_found_before_is_where_it_starts_and_rests() {
+        let mut a = Adaptive::starting_at(16, 4);
+        assert_eq!(a.conns, 4);
+        for _ in 0..(RETRY - 1) {
+            assert_eq!(a.step(9.0e6, false), 4);
+        }
+        assert_eq!(a.step(9.0e6, false), 8);
+        assert_eq!(Adaptive::starting_at(16, 1).conns, 1);
+        assert_eq!(Adaptive::starting_at(2, 9).conns, 2);
+    }
+
+    #[test]
+    fn at_the_limit_or_after_push_back_nothing_more_is_tried() {
+        let mut a = Adaptive::new(1);
+        for _ in 0..200 {
+            assert_eq!(a.step(1.0e6, false), 1);
+        }
+        let mut a = Adaptive::new(16);
+        a.step(1.0e6, false);
+        a.step(2.0e6, false);
+        assert_eq!(a.step(0.1e6, true), 2);
+        for _ in 0..500 {
+            assert_eq!(a.step(0.1e6, false), 2);
+        }
     }
 
     #[test]
@@ -212,6 +426,26 @@ mod tests {
         assert_eq!(a.step(0.1e6, true), 2);
         assert_eq!(a.step(0.1e6, true), 1);
         assert_eq!(a.step(0.1e6, true), 1);
+    }
+
+    #[test]
+    fn a_new_server_starts_from_what_is_known() {
+        let k = |v: &[(&str, usize)]| v.iter().map(|(h, n)| (h.to_string(), *n)).collect::<Vec<_>>();
+        let known = k(&[("release-assets.githubusercontent.com", 3), ("cdn.kernel.org", 1), ("files.example.co.uk", 6)]);
+        assert_eq!(first_guess(&known, "release-assets.githubusercontent.com"), Some(3));
+        // Same site, other server.
+        assert_eq!(first_guess(&known, "objects.githubusercontent.com"), Some(3));
+        assert_eq!(first_guess(&known, "dl.example.co.uk"), Some(6));
+        // Unknown site: what most servers came to; a tie goes to the lower count.
+        assert_eq!(first_guess(&known, "mirror.xtom.com.hk"), Some(1));
+        let known = k(&[("a.one.org", 4), ("b.two.org", 4), ("c.three.org", 1)]);
+        assert_eq!(first_guess(&known, "new.site.net"), Some(4));
+        // Too little known: start at one.
+        assert_eq!(first_guess(&k(&[("a.one.org", 8)]), "new.site.net"), None);
+        assert_eq!(first_guess(&[], "x.org"), None);
+        assert_eq!(site_of("127.0.0.1"), "127.0.0.1");
+        assert_eq!(site_of("kernel.org"), "kernel.org");
+        assert_eq!(site_of("a.b.c.com.au"), "c.com.au");
     }
 
     #[test]

@@ -46,7 +46,8 @@ pub fn now() -> u64 {
 }
 
 fn known(what: &str) -> Result<(), String> {
-    if what == "settings" { Ok(()) } else { Err(format!("there is no permission called '{what}'")) }
+    // settings: agents changing settings; logins: agents using the owner's saved logins.
+    if matches!(what, "settings" | "logins") { Ok(()) } else { Err(format!("there is no permission called '{what}'")) }
 }
 
 pub fn allowed(state: &Value, what: &str, now: u64) -> bool {

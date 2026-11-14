@@ -159,6 +159,44 @@ pub fn profile_key(dir: &Path) -> String {
     dir.to_string_lossy().to_ascii_lowercase().replace('/', "\\").trim_end_matches('\\').to_owned()
 }
 
+/// The folder a profile saves downloads to: `download.default_directory` in its Preferences.
+pub fn profile_download_dir(user_data: &Path) -> Option<PathBuf> {
+    let text = fs::read_to_string(user_data.join("Default").join("Preferences")).ok()?;
+    let prefs: Value = serde_json::from_str(&text).ok()?;
+    let dir = PathBuf::from(prefs["download"]["default_directory"].as_str()?);
+    dir.is_absolute().then_some(dir)
+}
+
+/// For a named session or the agent profile: `Downloads\Gamblium agents\<session>` (or
+/// `...\agent`). None for any other profile.
+pub fn agent_download_folder(user_data: &Path) -> Option<PathBuf> {
+    let lower = user_data.to_string_lossy().to_ascii_lowercase().replace('/', "\\");
+    let name = user_data.file_name()?.to_string_lossy().into_owned();
+    let who = if lower.contains("\\gamblium\\sessions\\") {
+        name
+    } else if lower.trim_end_matches('\\').ends_with("agent-profile") {
+        "agent".to_owned()
+    } else {
+        return None;
+    };
+    let home = PathBuf::from(std::env::var_os("USERPROFILE")?);
+    Some(home.join("Downloads").join("Gamblium agents").join(plain_name(&who)?))
+}
+
+/// A routing rule's folder: one or more plain names ("Videos", "Work/Reports"), never "..", a
+/// drive or an absolute path.
+pub fn plain_folder(folder: &str) -> Option<PathBuf> {
+    let parts: Vec<&str> = folder.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+    if parts.is_empty() || parts.len() > 4 {
+        return None;
+    }
+    let mut out = PathBuf::new();
+    for p in parts {
+        out.push(plain_name(p)?);
+    }
+    Some(out)
+}
+
 fn belongs(asked: &Value, profile: &str) -> bool {
     asked["profile"].as_str() == Some(profile)
 }
@@ -185,7 +223,10 @@ pub fn start(req: &Value, profile: &str) -> Result<Value, String> {
 /// says it is running but has gone quiet is reported as stopped.
 pub fn describe(asked: &Value, state: &Value, now: u64) -> Value {
     let mut row = state.as_object().cloned().unwrap_or_default();
-    let quiet = now.saturating_sub(state["updated"].as_u64().unwrap_or(0)) > GONE_AFTER_SECS;
+    // A state file being replaced at that instant can fail to read (Windows): then the start
+    // time counts, so a download that just began is not shown as stopped.
+    let last = state["updated"].as_u64().or(asked["started"].as_u64()).unwrap_or(0);
+    let quiet = now.saturating_sub(last) > GONE_AFTER_SECS;
     if matches!(state["state"].as_str(), Some("running" | "starting" | "seeding") | None) && quiet {
         // A torrent that was sharing and is gone had already finished.
         let was_seeding = state["state"].as_str() == Some("seeding");
@@ -286,9 +327,25 @@ pub fn action(id: &str, what: &str, profile: &str) -> Result<Value, String> {
             forget(id)
         }
         "remove" => forget(id),
+        // Delete: stop it, remove the file (finished or not) and take it off the list.
+        "delete" => {
+            let _ = cancel(id);
+            let (_, state, _, _) = one(id)?;
+            if let Some(path) = state["path"].as_str() {
+                for suffix in ["", ".part", ".part.state"] {
+                    let _ = fs::remove_file(format!("{path}{suffix}"));
+                }
+            }
+            forget(id)
+        }
         "open" | "show" => {
             let (_, state, _, _) = one(id)?;
-            let path = state["path"].as_str().filter(|p| Path::new(p).is_file()).ok_or("the file is not there any more")?;
+            // While it is still arriving, "show" points at the half-finished file.
+            let part = state["path"].as_str().map(|p| format!("{p}.part"));
+            let path = state["path"].as_str().map(str::to_owned).filter(|p| Path::new(p).is_file())
+                .or(part.filter(|p| what == "show" && Path::new(p).is_file()))
+                .ok_or("the file is not there any more")?;
+            let path = path.as_str();
             let mut cmd = std::process::Command::new("explorer.exe");
             if what == "show" {
                 cmd.arg(format!("/select,{path}"));
@@ -413,6 +470,21 @@ mod tests {
         assert!(args_for(&json!({ "url": "magnet:?xt=urn:btih:aa --config=x", "dir": r"C:\d" })).is_err());
         assert!(args_for(&json!({ "url": r"C:\nowhere\missing.torrent", "dir": r"C:\d" })).is_err());
         assert!(args_for(&json!({ "url": "https://x.org/a", "dir": r"C:\d", "seedMinutes": 30 })).unwrap().iter().all(|a| a != "--seed-minutes"));
+        let home = PathBuf::from(std::env::var_os("USERPROFILE").unwrap()).join("Downloads").join("Gamblium agents");
+        assert_eq!(agent_download_folder(Path::new(r"C:\Users\me\AppData\Local\Gamblium\sessions\shop")), Some(home.join("shop")));
+        assert_eq!(agent_download_folder(Path::new(r"C:\Users\me\AppData\Local\Gamblium\agent-profile")), Some(home.join("agent")));
+        assert_eq!(agent_download_folder(Path::new(r"C:\Users\me\AppData\Local\Gamblium\User Data")), None);
+        assert_eq!(plain_folder("Videos"), Some(PathBuf::from("Videos")));
+        assert_eq!(plain_folder("Work/Reports"), Some(PathBuf::from("Work").join("Reports")));
+        assert_eq!(plain_folder(".."), None);
+        assert_eq!(plain_folder("a/../../b"), None);
+        assert_eq!(plain_folder("C:"), None);
+        assert_eq!(plain_folder(""), None);
+        // An unreadable state right after the start is not "stopped".
+        let row = describe(&json!({ "id": "a", "started": 1000 }), &Value::Null, 1002);
+        assert_eq!(row["state"], Value::Null);
+        let row = describe(&json!({ "id": "a", "started": 1000 }), &Value::Null, 1000 + GONE_AFTER_SECS + 5);
+        assert_eq!(row["state"], json!("stopped"));
         let pasted = args_for(&json!({ "url": "https://x.org/a" })).unwrap();
         assert_eq!(pasted[1], "--dir");
         assert!(pasted[2].ends_with("Downloads"));

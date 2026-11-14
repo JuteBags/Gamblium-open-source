@@ -161,3 +161,16 @@ test("an automatic check is not disguised: hidden is told to use a real window, 
   assert.match(wallHint("cloudflare", false), /passes by itself/);
   assert.match(wallHint("check", true), /check for people/);
 });
+
+test('screenshot options: area, element, scroll box, scroll, page size, scale, format, checked first', async () => {
+  const { shotOptions } = await import('./agent.js');
+  assert.deepEqual(shotOptions({}), { full: false, mobile: false, scale: 1, format: 'png', delay: 0 });
+  assert.deepEqual(shotOptions({ x: 0, y: 100, width: 800, height: 400 }).area, { x: 0, y: 100, width: 800, height: 400 });
+  assert.equal(shotOptions({ full: true, format: 'jpg', quality: 70, scale: 0.5 }).format, 'jpeg');
+  assert.equal(shotOptions({ selector: '#main', scroll: 'bottom' }).scrollY, 'bottom');
+  assert.deepEqual(shotOptions({ viewport: '390x844', mobile: true }).viewport, { width: 390, height: 844 });
+  assert.deepEqual(shotOptions({ scroller: '.chat', y: 200 }), { full: false, mobile: false, scroller: '.chat', from: 200, rows: null, scale: 1, format: 'png', delay: 0 });
+  for (const bad of [{ x: 0, y: 1 }, { viewport: 'big' }, { viewport: '100x100' }, { full: true, selector: 'a' }, { format: 'png', quality: 50 }, { format: 'gif' }, { scale: 9 }, { delay: 20000 }, { scroll: 'top' }]) {
+    assert.throws(() => shotOptions(bad), undefined, JSON.stringify(bad));
+  }
+});

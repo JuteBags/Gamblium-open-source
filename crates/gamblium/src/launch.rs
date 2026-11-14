@@ -227,6 +227,29 @@ pub fn read_launch_freeze(user_data_dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Notes whether this start darkens light-only websites (forced dark), so the
+/// extension can give their links a colour that reads after darkening (owner,
+/// Nov 14 2026: Google's blue links came out pink). Kept beside the rest of the note.
+pub fn note_force_dark(user_data_dir: &Path, on: bool) -> io::Result<()> {
+    let file = user_data_dir.join(LAUNCH_INFO_FILE);
+    let mut v = fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_else(|| json!({}));
+    if !v.is_object() {
+        v = json!({});
+    }
+    v["forceDark"] = json!(on);
+    fs::create_dir_all(user_data_dir)?;
+    fs::write(file, v.to_string())
+}
+
+/// Whether the profile was last started with forced dark.
+pub fn read_launch_force_dark(user_data_dir: &Path) -> bool {
+    fs::read_to_string(user_data_dir.join(LAUNCH_INFO_FILE))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .map(|v| v["forceDark"] == json!(true))
+        .unwrap_or(false)
+}
+
 /// Hands freezing to the extension: the built-in freezer cannot make
 /// exceptions per tab, so it is switched off; frozen tabs still give memory
 /// back, and the short debugger attachment shows no warning bar.
@@ -603,6 +626,12 @@ mod tests {
         assert_eq!(read_launch_theme(&dir).as_deref(), Some("burgundy-dark"));
         assert!(!read_launch_freeze(&dir));
         write_launch_info(&dir, None, true, false).unwrap();
+        assert!(!read_launch_force_dark(&dir));
+        note_force_dark(&dir, true).unwrap();
+        assert!(read_launch_force_dark(&dir));
+        assert!(read_launch_freeze(&dir)); // the rest of the note stays
+        note_force_dark(&dir, false).unwrap();
+        assert!(!read_launch_force_dark(&dir));
         assert!(!read_launch_welcome(&dir));
         assert_eq!(read_launch_theme(&dir).as_deref(), Some("burgundy-dark")); // kept
         assert!(read_launch_freeze(&dir));
@@ -616,6 +645,7 @@ mod tests {
         assert_eq!(read_launch_theme(&dir), None);
         fs::write(dir.join(LAUNCH_INFO_FILE), "not json").unwrap();
         assert_eq!(read_launch_theme(&dir), None);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -686,7 +716,9 @@ mod tests {
         assert_eq!(v["profile"]["exit_type"], json!("Normal"));
         assert_eq!(v["profile"]["exited_cleanly"], json!(true));
         assert_eq!(v["profile"]["name"], json!("x"));
-        mark_clean_exit(&temp_dir("exit-none")).unwrap(); // no profile yet: nothing to do
+        let none = temp_dir("exit-none");
+        mark_clean_exit(&none).unwrap(); // no profile yet: nothing to do
+        fs::remove_dir_all(&none).unwrap();
         fs::remove_dir_all(&dir).unwrap();
     }
 

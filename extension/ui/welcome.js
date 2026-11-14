@@ -38,6 +38,7 @@ let prefs = readPrefs(stored.newtab);
 let theme = 'moon-dark';
 let colours = stored.colours; // {accent, bg} when the person made their own
 let imported = false;
+let bringShown = false;
 
 function keepPrefs() {
   chrome.storage.local.set({ newtab: prefs });
@@ -166,7 +167,7 @@ const SCREENS = {
   night: { title: 'Should white websites go dark too?', line: 'Some sites only come in white. Gamblium can darken them for you.' },
   search: { title: 'Pick your search.', line: 'Used by the search box on every new tab.' },
   sites: { title: 'Choose the sites you use most.', line: 'They become tiles on your new tab, one click away.' },
-  import: { title: 'Bring your things?', line: 'Bookmarks, history and saved passwords can come over from Chrome, Edge or Firefox.' },
+  import: { title: 'Bring your things?', line: 'Bookmarks, history and saved passwords can come over from Chrome, Edge or Firefox. Below: where you are signed in elsewhere, to sign in here too.' },
   newtab: { title: 'Set up your new tab.', line: 'Pick what you want to see each time. Change it any time from the square at the bottom right of a new tab.' },
   done: { title: 'Ready.', line: 'The window\'s frame and tabs take the new look the next time Gamblium starts.', next: 'Open a new tab' },
 };
@@ -191,6 +192,10 @@ function show(id) {
   $('back').disabled = order()[0] === id;
   $('said').textContent = '';
   if (id === 'done') paintSummary();
+  if (id === 'import' && !bringShown) {
+    bringShown = true;
+    import('./bring.js').then((m) => m.renderBring($('bringBox'), { compact: true }));
+  }
   paintDots();
   (id === 'name' ? $('name') : $('title')).focus();
 }

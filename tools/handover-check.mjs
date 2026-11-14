@@ -1,5 +1,5 @@
-// A big download started in the browser must end up with gamblium-dl, a small
-// one must stay with Brave. Uses the installed Gamblium (helper and extension),
+// Every download started in the browser must end up with gamblium-dl, small ones too, without
+// Brave ever listing it, and our card shows in the page. Uses the installed Gamblium (helper and extension),
 // a fresh profile, its own download folder and a local server.
 //   node tools/handover-check.mjs
 import { createServer } from 'node:http';
@@ -21,6 +21,10 @@ let peak = 0, open = 0;
 let loginSeen = 0, loginRefused = 0;
 const server = createServer((req, res) => {
   // /login sets a cookie; /private.bin is only served with it.
+  if (req.url.startsWith('/page')) {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    return res.end('<title>links</title><a id="go" href="/clicked.bin" download>file</a>');
+  }
   if (req.url.startsWith('/login')) {
     res.writeHead(200, { 'Set-Cookie': 'session=let-me-in; Path=/', 'Content-Type': 'text/html' });
     return res.end('<a id="go" href="/private.bin">file</a>');
@@ -66,6 +70,10 @@ const profile = join(work, 'profile'), saveTo = join(work, 'saved');
 const preset = join(work, 'preset.json');
 writeFileSync(preset, JSON.stringify({ name: 'handover-check', preferences: { 'download.default_directory': saveTo, 'download.prompt_for_download': false } }));
 
+// The downloader learns how many connections each server likes (servers.json); this run's
+// local server must not stay in the owner's list.
+const serversFile = join(stateDir, 'servers.json');
+const serversBefore = existsSync(serversFile) ? readFileSync(serversFile, 'utf8') : null;
 let pass = 0, fail = 0;
 const check = (name, ok, extra = '') => { ok ? pass++ : fail++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${extra ? '  ' + extra : ''}`); };
 const ours = () => (existsSync(stateDir) ? readdirSync(stateDir) : [])
@@ -106,9 +114,31 @@ try {
   }
   const secs = (Date.now() - t) / 1000;
   const list = ours();
-  check('the big download was handed to gamblium-dl', list.length === 1 && !!done, JSON.stringify(list.map((d) => ({ state: d.state.state, error: d.state.error, connections: d.state.connections }))));
+  check('both downloads, small too, were taken by gamblium-dl', list.length === 2 && !!done, JSON.stringify(list.map((d) => ({ url: d.asked.url.slice(-10), state: d.state.state, error: d.state.error, connections: d.state.connections }))));
+  check('saved in the profile\'s own download folder', list.every((d) => String(d.state.path || '').startsWith(saveTo)), list.map((d) => d.state.path).join(', '));
+  const braveList = JSON.parse((await inWorker(`chrome.downloads.search({}).then((l) => JSON.stringify(l.filter((d) => d.url.startsWith(${JSON.stringify(base)})).map((d) => d.state)))`)) || '[]');
+  check("Brave's own list does not hold them", braveList.length === 0, JSON.stringify(braveList));
+  // A click in a page: the card shows in that page.
+  await openTab(`${base}/page`);
+  await sleep(2500);
+  const pages = await fetch(`http://127.0.0.1:${PORT}/json/list`).then((r) => r.json());
+  const pg = pages.find((x) => x.type === 'page' && x.url === `${base}/page`);
+  const pws = new WebSocket(pg.webSocketDebuggerUrl);
+  await new Promise((r) => (pws.onopen = r));
+  let pn = 0;
+  const pcall = (method, params) => new Promise((r) => { const id = ++pn; const h = (m) => { const d = JSON.parse(m.data); if (d.id === id) { pws.removeEventListener('message', h); r(d.result); } }; pws.addEventListener('message', h); pws.send(JSON.stringify({ id, method, params })); });
+  await pcall('Runtime.evaluate', { expression: 'document.getElementById("go").click()', userGesture: true });
+  await sleep(2500);
+  const card = await pcall('Runtime.evaluate', { expression: '!!document.getElementById("gamblium-download-card")', returnByValue: true });
+  check('a click in a page: our card shows in the page', card?.result?.value === true);
+  await sleep(9000);
+  const cardGone = await pcall('Runtime.evaluate', { expression: '!document.getElementById("gamblium-download-card")', returnByValue: true });
+  check('and goes away by itself', cardGone?.result?.value === true);
+  pws.close();
+  check('the clicked file arrived through ours', ours().some((d) => String(d.asked.url).endsWith('/clicked.bin') && d.state.state === 'done') && existsSync(join(saveTo, 'clicked.bin')));
   check('it arrived whole', existsSync(join(saveTo, 'big.bin')) && sha(readFileSync(join(saveTo, 'big.bin'))) === sha(body), `${secs.toFixed(0)} s`);
-  check('it used more than one connection', peak > 1 && done && done.state.connections > 1, `peak ${peak}`);
+  // The server's own count: the downloader's figure is how many are left at the end.
+  check('it used more than one connection', peak > 1, `peak ${peak}`);
   check('faster than one connection could be', secs < 20, `${secs.toFixed(0)} s against 24 s`);
   // Behind a login: the page sets a cookie, then the file is asked for.
   await openTab(`${base}/login`);
@@ -152,11 +182,11 @@ try {
   // A sealed login moved onto another download must not open.
   const other = await helper({ type: 'dl-action', id: 'ffffffffffffffff', action: 'resume' });
   check('an unknown download cannot be continued', other.ok === false);
-  check('the small download stayed with Brave and arrived', existsSync(join(saveTo, 'small.bin')) && sha(readFileSync(join(saveTo, 'small.bin'))) === sha(body.subarray(0, SMALL)));
+  check('the small download arrived whole', existsSync(join(saveTo, 'small.bin')) && sha(readFileSync(join(saveTo, 'small.bin'))) === sha(body.subarray(0, SMALL)));
   // What the extension noted about the hand-over (read from its worker).
   try {
     const notes = JSON.parse((await inWorker('chrome.storage.local.get({handovers: []}).then((s) => JSON.stringify(s.handovers))')) || '[]');
-    check("Brave's own copy was cancelled", notes.length === 3 && notes.every((n) => n.cancel === 'ok' && n.after?.state === 'interrupted'), notes.map((n) => n.cancel + '/' + n.after?.state).join(', '));
+    check("Brave's own copy was cancelled every time", notes.length >= 5 && notes.every((n) => n.cancel === 'ok'), notes.map((n) => n.cancel).join(', '));
   } catch (e) {
     console.log('      (could not read the hand-over note: ' + e + ')');
   }
@@ -167,6 +197,7 @@ try {
   check('the run finished', false, String(e && e.stack ? e.stack : e).slice(0, 400));
 } finally {
   spawnSync(app, ['close', '--user-data-dir', profile], { encoding: 'utf8' });
+  if (serversBefore === null) rmSync(serversFile, { force: true }); else writeFileSync(serversFile, serversBefore);
   for (const d of ours()) for (const f of [d.id + '.args.json', d.id + '.json']) rmSync(join(stateDir, f), { force: true });
   await sleep(1500);
   rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });

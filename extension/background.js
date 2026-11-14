@@ -3,12 +3,37 @@ import {
   sleepPlan, tabsToSleep, tabsToWake, tempOf, MAX_TEMP, trimPlan, trimWaiting,
 } from "./rules.js";
 import { DOWNLOAD_DEFAULTS, OWN_DEFAULTS, isBrowserDownloadsPage, isTorrent, routedFilename, splitPath, stayReason } from "./download-rules.js";
+import { showDownloadCard } from "./dl-card.js";
+import { bangRules, bangTarget, coveredByRules } from "./bangs.js";
+import { linkColours, beforeDarkening } from "./darklinks.js";
+import { CODE_STAMP } from "./code-stamp.js";
+
+// The browser keeps this extension's background code from a profile's first start and runs that
+// copy ever after: new files, a new version and restarts do not replace it (measured Nov 14 2026;
+// the owner's profile ran 1.0.0-era code under 1.0.5, so no bangs, Peek, command bar or update
+// banner). `gamblium install` stamps the files (code-stamp.js); when the stamp on disk is not the
+// one this code was built with, the extension is reloaded, which makes the browser take the code
+// on disk, and the browser is restarted (tabs come back): after a reload this browser runs no
+// background code for us until it starts again (measured). Once per stamp, never in a loop.
+(async () => {
+  try {
+    const text = await fetch(chrome.runtime.getURL("code-stamp.js"), { cache: "no-store" }).then((r) => r.text());
+    const onDisk = /CODE_STAMP\s*=\s*"([^"]*)"/.exec(text)?.[1];
+    if (!onDisk || onDisk === CODE_STAMP) return;
+    const { codeReloadFor } = await chrome.storage.local.get({ codeReloadFor: null });
+    if (codeReloadFor === onDisk) return;
+    await chrome.storage.local.set({ codeReloadFor: onDisk, codeReloadFrom: CODE_STAMP });
+    // The helper's restart closes the browser 0.7 s after it answers; the reload goes first.
+    await native({ type: "restart" }).catch(() => null);
+    chrome.runtime.reload();
+  } catch { /* nothing to compare: carry on */ }
+})();
 import { applyEvent, emptyState, listRecords, toCurl } from "./capture.js";
 import {
   capturePage, cleanName, isValidSession, placement, restorePage, snapshot, summaries, withSession, withoutSession,
   findInSessions, sessionsByUrl,
 } from "./sessions.js";
-import { attribute, proxyConfig, proxySummary, groupTotals, groupLimitPlan } from "./tabstats.js";
+import { attribute, proxyConfig, proxySummary, groupTotals, groupLimitPlan, withGroupIcon, splitGroupIcon } from "./tabstats.js";
 import { adoptIds, emptyIdMaps, firstId, makeCtl, noteReplaced } from "./agent.js";
 import { pack, unpack } from "./pack.js";
 import { freeColour, listSpaces, nextSpace, switchPlan } from "./spaces.js";
@@ -865,6 +890,7 @@ chrome.runtime.onStartup.addListener(arm);
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name !== ALARM) return;
   check();
+  updateOnStart().catch(() => {}); // only if the start's own ask did not get through
   enforceGroupLimits().catch(() => {});
   bridgeEnsure(); // reconnect if the helper went away
 });
@@ -873,24 +899,36 @@ chrome.alarms.onAlarm.addListener((a) => {
 // Brave's own downloader does the transfer. We add routing rules and give the
 // UI a list and controls.
 
+// Every download goes to our own downloader (owner, Nov 14 2026), taken here, while Brave is
+// still asking for the file's name: Brave adds a download to its bubble and its list only once
+// the name is settled, so a download cancelled now was never shown anywhere. Our card shows it
+// instead. Only what we cannot fetch stays with Brave (blob: and data: addresses, or ours
+// failing at once, see GIVE_BACK_AFTER_MS).
 chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
-  chrome.storage.local.get(DOWNLOAD_DEFAULTS).then((stored) => {
-    const filename = routedFilename(item, { ...DOWNLOAD_DEFAULTS, ...stored });
-    if (filename) suggest({ filename, conflictAction: "uniquify" });
+  (async () => {
+    const stored = await chrome.storage.local.get({ ...DOWNLOAD_DEFAULTS, ...OWN_DEFAULTS });
+    const routed = routedFilename(item, { ...DOWNLOAD_DEFAULTS, ...stored });
+    const own = { ...OWN_DEFAULTS, ...stored };
+    let taken = false;
+    if (!stayReason(item, own, chrome.runtime.id) && !isTorrent(item.finalUrl || item.url)) {
+      taken = await takeOver(item, routed).catch(() => false);
+    }
+    if (taken) return suggest();
+    if (routed) suggest({ filename: routed, conflictAction: "uniquify" });
     else suggest();
-  });
+  })();
   return true; // suggest() is called later
 });
 
-// A big download goes to our own downloader as soon as Brave knows where the
-// file is to be saved (the user may have been asked). Brave's copy is then
-// cancelled. If ours cannot fetch it (a one-time link, a login we do not
-// have), the download is given back to Brave.
+// If ours cannot fetch it (a one-time link, a POST form, a login we do not have) within this
+// long, the download is given back to Brave, which then shows it as usual.
 const GIVE_BACK_AFTER_MS = 6000;
 
-async function cookieHeader(url) {
+/** The cookies the browser would send to `url`, from the cookie store of the window it came
+ *  from (a private window has its own). */
+async function cookieHeader(url, storeId) {
   try {
-    const cookies = await chrome.cookies.getAll({ url });
+    const cookies = await chrome.cookies.getAll(storeId ? { url, storeId } : { url });
     // The soonest moment any of them runs out (session cookies carry none).
     const ends = cookies.map((c) => c.expirationDate).filter((t) => t > 0);
     return { header: cookies.map((c) => c.name + "=" + c.value).join("; "), expires: ends.length ? Math.floor(Math.min(...ends)) : null };
@@ -899,41 +937,253 @@ async function cookieHeader(url) {
   }
 }
 
-async function handOver(id) {
-  const [item] = await chrome.downloads.search({ id });
-  const own = await chrome.storage.local.get(OWN_DEFAULTS);
-  if (stayReason(item, own, chrome.runtime.id)) return;
-  const { dir, name } = splitPath(item.filename);
-  const url = item.finalUrl || item.url;
-  // The login for this address rides along (Drive, forums, anything behind a
-  // sign-in), under the browser's own name. The downloader does not follow
-  // redirects when it carries a cookie, so the cookie stays with its site.
-  const login = await cookieHeader(url);
-  const started = await native({ type: "dl-start", url, dir, name, referer: item.referrer || "", cookie: login.header, cookieExpires: login.expires, userAgent: navigator.userAgent, startConnections: 4 });
-  if (!started || started.ok === false || !started.download) return; // no helper: Brave carries on
-  const note = { at: Date.now(), url, ours: started.download, braveId: id };
+/** Login cookies for every host on the way (the link's and the file's), each kept for its own
+ *  host: the downloader follows the redirects itself and gives each host only its own. */
+async function loginsFor(urls, incognito) {
+  const storeId = incognito ? (await chrome.cookies.getAllCookieStores().catch(() => [])).find((s) => s.id !== "0")?.id : undefined;
+  const map = {};
+  let expires = null;
+  for (const u of new Set(urls.filter(Boolean))) {
+    let host = "";
+    try { host = new URL(u).hostname.toLowerCase(); } catch { continue; }
+    if (map[host] !== undefined) continue;
+    const c = await cookieHeader(u, storeId);
+    if (!c.header) continue;
+    map[host] = c.header;
+    if (c.expires) expires = expires ? Math.min(expires, c.expires) : c.expires;
+  }
+  return { cookie: Object.keys(map).length ? JSON.stringify(map) : "", expires };
+}
+
+let noteWrites = Promise.resolve();
+
+// ---- Peek: Shift+click previews a link in a floating window (content/peek.js) ------------
+const PEEK_SCRIPT = "gamblium-peek";
+async function peekRegister() {
+  const { peekOn = true } = await chrome.storage.local.get({ peekOn: true });
+  const have = await chrome.scripting.getRegisteredContentScripts({ ids: [PEEK_SCRIPT] }).catch(() => []);
+  if (peekOn && !have.length) {
+    await chrome.scripting.registerContentScripts([{ id: PEEK_SCRIPT, js: ["content/peek.js"], matches: ["http://*/*", "https://*/*"], runAt: "document_start", allFrames: true, persistAcrossSessions: true }]).catch(() => {});
+  } else if (peekOn && have.length && !have[0].allFrames) {
+    // Registered by an earlier version for top frames only; the card's own frame needs it too (Esc).
+    await chrome.scripting.updateContentScripts([{ id: PEEK_SCRIPT, allFrames: true }]).catch(() => {});
+  } else if (!peekOn && have.length) {
+    await chrome.scripting.unregisterContentScripts({ ids: [PEEK_SCRIPT] }).catch(() => {});
+  }
+}
+chrome.runtime.onInstalled.addListener(() => peekRegister());
+chrome.runtime.onStartup.addListener(() => peekRegister());
+chrome.storage.onChanged.addListener((c, area) => {
+  if (area === "local" && c.peekOn) peekRegister();
+});
+
+// Peek's card is a frame in the page (content/peek.js). While one is open in a tab, a session
+// rule for that tab only takes away the headers that forbid framing, for its frames.
+async function peekFrame(sender) {
+  const tabId = sender?.tab?.id;
+  if (tabId == null) return { ok: false };
+  await chrome.declarativeNetRequest.updateSessionRules({
+    removeRuleIds: [tabId],
+    addRules: [{
+      id: tabId, priority: 5,
+      action: { type: "modifyHeaders", responseHeaders: [{ header: "x-frame-options", operation: "remove" }, { header: "content-security-policy", operation: "remove" }] },
+      condition: { tabIds: [tabId], resourceTypes: ["sub_frame"] },
+    }],
+  }).catch(() => {});
+  return { ok: true };
+}
+async function peekDone(sender) {
+  const tabId = sender?.tab?.id;
+  if (tabId != null) await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [tabId] }).catch(() => {});
+  return { ok: true };
+}
+async function peekOpenTab(url, active, sender) {
+  if (!/^https?:\/\//i.test(url)) return { ok: false };
+  const t = sender?.tab;
+  await chrome.tabs.create({ url, active: active !== false, ...(t ? { windowId: t.windowId, index: t.index + 1, openerTabId: t.id } : {}) });
+  return { ok: true };
+}
+chrome.tabs.onRemoved.addListener((tabId) => void chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [tabId] }).catch(() => {}));
+
+// ---- Video pops out when its tab is left (owner, Nov 14 2026: "video pop out or PIP") ----
+// Chromium's own automatic picture-in-picture needs a site permission and a tab switch it
+// counts as the person's; ours asks the playing video of the tab just left to go
+// picture-in-picture through a debugger attached for that one command (a user gesture, as
+// freezing does; only where the launcher made the debugger silent). Coming back to the tab
+// closes the little window. Settings > Tabs: popOutVideo.
+// The tab each window showed last lives in session storage: the worker sleeps between tab
+// switches, and a map in memory came back empty (owner, Nov 14 2026: no pop-out seen).
+chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
+  const key = "lastTab:" + windowId;
+  const prev = (await chrome.storage.session.get(key))[key];
+  await chrome.storage.session.set({ [key]: tabId });
+  const { popOutVideo = true, launchFreeze = null } = await chrome.storage.local.get({ popOutVideo: true, launchFreeze: null });
+  if (!popOutVideo) return;
+  // Back to a tab whose video is out: in again.
+  chrome.scripting.executeScript({ target: { tabId }, func: () => { if (document.pictureInPictureElement) document.exitPictureInPicture(); } }).catch(() => {});
+  if (!prev || prev === tabId || launchFreeze !== true || !chrome.debugger) return;
+  const p = await chrome.tabs.get(prev).catch(() => null);
+  if (!p || !p.audible || p.windowId !== windowId) return;
+  const target = { tabId: prev };
+  try {
+    await chrome.debugger.attach(target, "1.3");
+    await chrome.debugger.sendCommand(target, "Runtime.evaluate", {
+      userGesture: true,
+      awaitPromise: true,
+      expression: `(() => { const v = [...document.querySelectorAll('video')].find((x) => !x.paused && !x.ended && x.videoWidth > 0 && !x.disablePictureInPicture); if (!v || document.pictureInPictureElement) return false; return v.requestPictureInPicture().then(() => true, () => false); })()`,
+    });
+  } catch { /* a tab we may not attach to (a browser page, another debugger) */ }
+  finally {
+    await chrome.debugger.detach(target).catch(() => {});
+  }
+});
+
+/** "Work stuff" -> "space-work-stuff": the named session that is this space's container. */
+export function containerName(title) {
+  const base = splitGroupIcon(title).name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30);
+  return "space-" + (base || "untitled");
+}
+
+/** A space into its own container (owner, Nov 14 2026: containers tied to Spaces): a named
+ *  session, which is a profile of its own (own cookies and logins), shown in its own window
+ *  with the space's pages; the space's tabs leave this window (the group goes to Recently
+ *  closed, as any closed group). Brave 1.99's own Containers are compiled in but cannot be
+ *  switched on, so the session is the container. */
+async function spaceToContainer(groupId) {
+  const g = await chrome.tabGroups.get(groupId).catch(() => null);
+  if (!g) return { ok: false, error: "no such space" };
+  const tabs = await chrome.tabs.query({ groupId });
+  const urls = tabs.map((t) => t.url || t.pendingUrl || "").filter((u) => /^https?:\/\//.test(u));
+  const name = containerName(g.title);
+  const list = await native({ type: "named-sessions", args: ["list"] });
+  if (!list || list.ok === false) return { ok: false, error: (list && list.error) || "the helper did not answer" };
+  const exists = (list.sessions || []).some((s) => s.name === name);
+  const made = await native({ type: "named-sessions", args: exists ? ["open", name] : ["create", name, "--window"] });
+  if (!made || made.ok === false) return { ok: false, error: (made && made.error) || "could not start the container" };
+  let opened = 0;
+  for (const u of urls) {
+    const r = await native({ type: "named-sessions", args: ["open-url", name, u] });
+    if (r && r.ok !== false) opened++;
+  }
+  // Only once the pages are in the container do they leave here.
+  if (opened === urls.length) await chrome.tabs.remove(tabs.map((t) => t.id)).catch(() => {});
+  return { ok: true, session: name, moved: opened, of: urls.length };
+}
+
+/** A group's icon: an emoji in front of its name (tabstats.withGroupIcon). Limits are kept by
+ *  name, so a group's limit moves to its new name. */
+async function groupIconSet(groupId, icon) {
+  const g = await chrome.tabGroups.get(groupId).catch(() => null);
+  if (!g) return { ok: false, error: "no such group" };
+  const title = withGroupIcon(g.title, icon);
+  await chrome.tabGroups.update(groupId, { title });
+  if (g.title && g.title !== title) {
+    const { groupLimits = {} } = await chrome.storage.local.get({ groupLimits: {} });
+    if (groupLimits[g.title]) {
+      groupLimits[title] = groupLimits[g.title];
+      delete groupLimits[g.title];
+      await chrome.storage.local.set({ groupLimits });
+    }
+  }
+  return { ok: true, title };
+}
+
+/** An agent's or the command line's download: straight to our downloader, with the logins the
+ *  browser holds for the address and the folder rules, like a click. `filename` may hold a
+ *  folder ("Reports/q3.pdf"), inside the download folder. */
+async function ownDownload(url, filename) {
+  const rel = filename ? String(filename).replace(/\\/g, "/") : "";
+  const name = rel ? rel.split("/").pop() : undefined;
+  const folder = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+  const login = await loginsFor([url], false);
+  return native({ type: "dl-start", url, ...(name ? { name } : {}), folder, cookie: login.cookie, cookieExpires: login.expires, userAgent: navigator.userAgent });
+}
+
+async function takeOver(item, routed) {
+  const name = String(routed || item.filename || "").split(/[\\/]/).pop();
+  const folder = routed && routed.includes("/") ? routed.slice(0, routed.lastIndexOf("/")) : "";
+  // The address the page linked to, not the signed one it led to: that one runs out (GitHub's
+  // after about an hour), and the downloader asks the link again for a fresh one.
+  const url = item.url;
+  const login = await loginsFor([item.url, item.finalUrl], item.incognito);
+  const started = await native({ type: "dl-start", url, name, folder, referer: item.referrer || "", cookie: login.cookie, cookieExpires: login.expires, userAgent: navigator.userAgent, private: !!item.incognito });
+  if (!started || started.ok === false || !started.download) return false; // no helper: Brave carries on
+  const id = item.id;
+  const note = { at: Date.now(), url, ours: started.download, braveId: id, private: !!item.incognito };
   note.cancel = await chrome.downloads.cancel(id).then(() => "ok", (e) => String(e && e.message ? e.message : e));
-  const [after] = await chrome.downloads.search({ id });
-  note.after = after ? { state: after.state, error: after.error, paused: after.paused, danger: after.danger, received: after.bytesReceived } : null;
-  // The last few hand-overs, for the Downloads page and for finding faults.
-  const { handovers = [] } = await chrome.storage.local.get({ handovers: [] });
-  await chrome.storage.local.set({ handovers: [note, ...handovers].slice(0, 20) });
-  // Brave removes its half-written file a moment after the cancel; taking the
-  // entry off the list before that leaves the file behind.
+  // Off Brave's list too (it never showed there; this keeps chrome://downloads empty of it).
+  chrome.downloads.erase({ id }).catch(() => {});
   setTimeout(() => chrome.downloads.erase({ id }).catch(() => {}), 2000);
+  if (!item.incognito) {
+    // The last few hand-overs, for the Downloads page and for finding faults. Not kept for
+    // private windows.
+    // One write at a time: two downloads starting together lost a note.
+    noteWrites = noteWrites.then(async () => {
+      const { handovers = [] } = await chrome.storage.local.get({ handovers: [] });
+      await chrome.storage.local.set({ handovers: [note, ...handovers].slice(0, 20) });
+    }).catch(() => {});
+  } else {
+    privateJobs.add(started.download);
+  }
+  downloadCard(started.download, name, item.incognito).catch(() => {});
   setTimeout(async () => {
     const list = await native({ type: "dl-list" });
     const row = ((list && list.downloads) || []).find((d) => d.id === started.download);
     if (row && row.state === "error" && !(row.done > 0)) {
       await native({ type: "dl-forget", id: started.download });
       // Started by this extension, so stayReason leaves it with Brave.
-      chrome.downloads.download({ url }).catch(() => {});
+      chrome.downloads.download({ url: item.finalUrl || item.url }).catch(() => {});
     }
   }, GIVE_BACK_AFTER_MS);
+  return true;
+}
+
+// Downloads from private windows: taken off our list as soon as they are finished, so nothing
+// of them stays in the Downloads page.
+const privateJobs = new Set();
+setInterval(async () => {
+  if (!privateJobs.size) return;
+  const list = await native({ type: "dl-list" }).catch(() => null);
+  for (const d of (list && list.downloads) || []) {
+    if (privateJobs.has(d.id) && d.state === "done") {
+      await native({ type: "dl-forget", id: d.id }).catch(() => {});
+      privateJobs.delete(d.id);
+    }
+  }
+}, 5000);
+
+/** The card, in the page in front of the window the download came from; in a small window
+ *  of its own where a page cannot be written into (browser pages, the new tab page). */
+async function downloadCard(id, name, incognito) {
+  const wins = await chrome.windows.getAll({ windowTypes: ["normal"] });
+  const win = wins.filter((w) => !!w.incognito === !!incognito).sort((a, b) => Number(b.focused) - Number(a.focused))[0];
+  if (!win) return;
+  const [tab] = await chrome.tabs.query({ active: true, windowId: win.id });
+  if (tab && /^https?:/.test(tab.url || "")) {
+    const ok = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: showDownloadCard, args: [{ id, name }] }).then(() => true, () => false);
+    if (ok) return;
+  }
+  const W = 342, H = 112;
+  const left = Math.max(0, (win.left || 0) + (win.width || 1200) - W - 16);
+  const top = (win.top || 0) + 84;
+  await chrome.windows.create({ url: chrome.runtime.getURL(`ui/dl-card.html?id=${encodeURIComponent(id)}&name=${encodeURIComponent(name)}`), type: "popup", width: W, height: H, left, top, focused: false, incognito: !!incognito }).catch(() => {});
+}
+
+async function downloadCardRow(id) {
+  const list = await native({ type: "dl-list" });
+  return { ok: true, download: ((list && list.downloads) || []).find((d) => d.id === id) || null };
+}
+
+async function downloadCardDo(id, action, sender) {
+  if (action === "page") {
+    await chrome.tabs.create({ url: chrome.runtime.getURL("ui/downloads.html"), windowId: sender?.tab?.windowId }).catch(() => chrome.tabs.create({ url: chrome.runtime.getURL("ui/downloads.html") }));
+    return { ok: true };
+  }
+  if (!["pause", "resume", "show", "open"].includes(action)) return { ok: false, error: "unknown action" };
+  return native({ type: "dl-action", id, action });
 }
 
 chrome.downloads.onChanged.addListener((delta) => {
-  if (delta.filename && delta.filename.current) handOver(delta.id).catch(() => {});
   if (delta.state && delta.state.current === "complete") torrentFileSaved(delta.id).catch(() => {});
 });
 
@@ -1385,7 +1635,7 @@ async function sessionImport({ session }) {
 
 const NATIVE_HOST = "com.gamblium.host";
 const NATIVE_TYPES = new Set([
-  "ping", "stats", "freeze", "thaw", "trim", "lift-extension", "brand-get", "brand-set", "restart", "dl-start", "dl-list", "dl-cancel", "dl-resume", "dl-forget", "dl-action", "open-folder", "open-tor", "welcome-done", "update-check", "update-status", "update-restart", "capture-window", "capture-piece", "seal", "open", "named-sessions", "permit-check", "permit-get", "permit-set", "scope-list", "scope-add", "scope-check", "audit", "scan", "cve",
+  "ping", "stats", "freeze", "thaw", "trim", "lift-extension", "brand-get", "brand-set", "restart", "dl-start", "dl-list", "dl-cancel", "dl-resume", "dl-forget", "dl-action", "open-folder", "open-tor", "welcome-done", "bring-scan", "login-list", "login-save", "login-remove", "login-fill", "update-check", "update-status", "update-restart", "capture-window", "capture-piece", "seal", "open", "named-sessions", "permit-check", "permit-get", "permit-set", "scope-list", "scope-add", "scope-check", "audit", "scan", "cve",
 ]);
 
 async function native(request) {
@@ -1416,6 +1666,8 @@ async function syncLaunchScheme() {
   if (ping && ping.ok !== false) await chrome.storage.session.set({ launchChecked: true });
   // Did the launcher set this browser up for freezing by the extension?
   await chrome.storage.local.set({ launchFreeze: ping.ok === false ? null : ping.freeze === true });
+  // Are light-only websites darkened this start? Then their links get a colour that reads.
+  if (ping.ok !== false) await chrome.storage.local.set({ forceDarkPages: ping.forceDark === true });
   // A pen-test profile (gamblium launch --pentest): the right-click menu puts Inspect first (content/menu.js reads it).
   if (ping.ok !== false) await chrome.storage.local.set({ pentestProfile: ping.pentest === true });
   // The toolbar button is the menu (the four pips; Brave's own menu button is hidden in the copy),
@@ -1431,6 +1683,34 @@ async function syncLaunchScheme() {
 }
 syncLaunchScheme();
 native({ type: "lift-extension" });
+
+// ---- Links on darkened websites (darklinks.js, content/darklinks.js) -----------------
+// Only while the browser darkens light-only websites and a colour is chosen (Settings >
+// Appearance; cyan unless changed). Checked every time the worker starts, not only on
+// onStartup, which a profile may not see.
+// From the page's first byte, the stylesheet with it, so no link is painted in another colour
+// first; the colours the page needs are kept ready (darkLinksVars), with no message per page.
+const DARK_LINKS_SCRIPT = { id: "gamblium-darklinks", js: ["content/darklinks.js"], css: ["content/darklinks.css"], matches: ["http://*/*", "https://*/*"], runAt: "document_start", allFrames: true, persistAcrossSessions: true };
+async function darkLinksRegister() {
+  const { forceDarkPages = false, darkLinks = null } = await chrome.storage.local.get({ forceDarkPages: false, darkLinks: null });
+  const shown = linkColours(darkLinks);
+  const vars = shown ? { link: beforeDarkening(shown.link), visited: beforeDarkening(shown.visited) } : null;
+  await chrome.storage.local.set({ darkLinksVars: vars });
+  const want = forceDarkPages && !!shown;
+  const have = await chrome.scripting.getRegisteredContentScripts({ ids: [DARK_LINKS_SCRIPT.id] }).catch(() => []);
+  // An earlier build registered it later in the page and without the stylesheet: registered again.
+  if (want && have.length && (have[0].runAt !== "document_start" || !have[0].css?.length)) {
+    await chrome.scripting.unregisterContentScripts({ ids: [DARK_LINKS_SCRIPT.id] }).catch(() => {});
+    have.length = 0;
+  }
+  if (want && !have.length) await chrome.scripting.registerContentScripts([DARK_LINKS_SCRIPT]).catch(() => {});
+  if (!want && have.length) await chrome.scripting.unregisterContentScripts({ ids: [DARK_LINKS_SCRIPT.id] }).catch(() => {});
+}
+darkLinksRegister();
+chrome.storage.onChanged.addListener((c, area) => {
+  if (area === "local" && (c.forceDarkPages || c.darkLinks)) darkLinksRegister();
+});
+
 
 // ---- First run ---------------------------------------------------------------------
 // A profile that has not been through the welcome page gets it once, in a tab.
@@ -1584,6 +1864,9 @@ const ctl = makeCtl({
   tabStats: () => tabStats(),
   downloadsList: (limit) => downloadsList(limit),
   downloadsAction: (id, action) => downloadsAction(id, action),
+  ownDownload: (url, filename) => ownDownload(url, filename),
+  ownJobs: () => native({ type: "dl-list" }).then((r) => (r && r.jobs) || []),
+  ownAction: (id, action) => native({ type: "dl-action", id, action }),
   defaultDownloadRules: DOWNLOAD_DEFAULTS.rules,
   capture: {
     start: () => captureStart(),
@@ -1941,7 +2224,9 @@ async function menuDo(msg, sender) {
 // A script of ours inside a web page may ask for the menu's own two things and nothing
 // else: everything below is for our own pages only.
 const OUR_ORIGIN = new URL(chrome.runtime.getURL("")).origin;
-const FROM_A_PAGE = new Set(["menu-open", "menu-do"]);
+// dl-card / dl-card-do: the download card that background.js itself puts into the page.
+// peek / peek-open: Peek's own script in pages (content/peek.js) and its "Open as tab".
+const FROM_A_PAGE = new Set(["menu-open", "menu-do", "dl-card", "dl-card-do", "peek-frame", "peek-done", "peek-open", "peek-esc"]);
 
 // ---- Closed tab groups (owner, Nov 14 2026) ------------------------------------------
 // The browser's own "recently closed" list has tabs and windows, not groups. So the extension
@@ -2033,10 +2318,38 @@ async function updateRestart() {
 chrome.alarms.clear("gamblium-update").catch(() => {}); // the 6-hour check of #212, gone
 async function updateOnStart() {
   if (IS_AGENT_BUILD) return;
+  // Once per browser start, also when onStartup does not fire (session storage starts empty).
+  // Done only once the helper has answered: a failed first ask (a busy start) is asked again by
+  // the minute check (owner, Nov 14 2026: no check on his own profile's start).
+  const { updateAsked, updateAsking } = await chrome.storage.session.get({ updateAsked: false, updateAsking: 0 });
+  if (updateAsked || Date.now() - updateAsking < 60000) return;
+  await chrome.storage.session.set({ updateAsking: Date.now() });
   const { autoUpdate } = await chrome.storage.local.get({ autoUpdate: true });
-  if (autoUpdate !== false) updateCheck(true);
+  if (autoUpdate === false) return chrome.storage.local.set({ updateLast: { at: Date.now(), result: "automatic updates are off" } });
+  const first = await updateCheck(true).catch((e) => ({ ok: false, error: String(e?.message || e) }));
+  await chrome.storage.local.set({ updateLast: { at: Date.now(), result: first && first.ok !== false ? (first.ready ? "ready" : "asked: " + (first.update?.state || "?")) : "failed: " + (first?.error || "no answer") } });
+  if (!first || first.ok === false) return; // asked again by the minute check
+  await chrome.storage.session.set({ updateAsked: true });
+  if (first.ready) return updateReadyMark(first);
+  // The download runs in its own program: watched every 5 s (5 minutes at most), so the badge
+  // and the banners come the moment it is ready, not at the next start (owner, Nov 14 2026).
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const st = await native({ type: "update-status" }).catch(() => null);
+    if (st?.ready) return updateReadyMark(st);
+    const s = st?.update?.state;
+    if (i > 0 && (s === "idle" || s === "error")) break; // nothing newer, or it failed
+  }
+}
+async function updateReadyMark(r) {
+  chrome.action.setBadgeText({ text: "↑" }).catch(() => {});
+  chrome.action.setBadgeBackgroundColor({ color: "#3B82F6" }).catch(() => {});
+  chrome.action.setTitle({ title: `Gamblium: version ${r.update?.version} is ready. Restart to update.` }).catch(() => {});
+  // Open pages (the new tab) show their banner when this changes.
+  await chrome.storage.local.set({ updateReady: r.update?.version || "new" });
 }
 chrome.runtime.onStartup.addListener(() => { updateOnStart(); });
+setTimeout(() => { updateOnStart().catch(() => {}); }, 3000);
 // After Restart to update: the browser may reopen only the window closed last (its own "continue where
 // you left off"), or none. A few seconds after the worker starts (onStartup did not fire in a test),
 // every saved window that is not open again is reopened, the lone new tab window closed, and the
@@ -2115,7 +2428,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     : msg.type === "update-restart" ? updateRestart()
     : msg.type === "closed-groups" ? chrome.storage.local.get({ closedGroups: [] }).then((r) => ({ ok: true, groups: r.closedGroups }))
     : msg.type === "group-reopen" ? reopenGroup(String(msg.id || ""), _sender.tab?.windowId)
+    : msg.type === "group-icon-set" ? groupIconSet(Number(msg.groupId), String(msg.icon || "").slice(0, 16))
     : msg.type === "sleep-now" ? sleepNow(msg.scope, msg.windowId).then((slept) => ({ slept }))
+    : msg.type === "peek-frame" ? peekFrame(_sender)
+    : msg.type === "peek-done" ? peekDone(_sender)
+    : msg.type === "peek-esc" ? (_sender?.tab ? chrome.tabs.sendMessage(_sender.tab.id, { type: "peek-close" }, { frameId: 0 }).then(() => ({ ok: true }), () => ({ ok: false })) : Promise.resolve({ ok: false }))
+    : msg.type === "peek-open" ? peekOpenTab(String(msg.url || ""), msg.active, _sender)
+    : msg.type === "dl-card" ? downloadCardRow(String(msg.id || ""))
+    : msg.type === "dl-card-do" ? downloadCardDo(String(msg.id || ""), String(msg.action || ""), _sender)
     : msg.type === "downloads-list" ? downloadsList(msg.limit)
     : msg.type === "downloads-action" ? downloadsAction(msg.id, msg.action)
     : msg.type === "downloads-start" ? chrome.downloads.download({ url: msg.url }).then((id) => ({ id }))
@@ -2145,7 +2465,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     : msg.type === "spaces-list" ? spacesList(msg.windowId)
     : msg.type === "space-switch" ? spaceSwitch(msg.groupId)
     : msg.type === "space-new" ? spaceNew(msg)
+    : msg.type === "space-next" ? spacesList(msg.windowId).then((r) => { const to = r.ok ? nextSpace(r.spaces) : null; return to !== null ? spaceSwitch(to) : { ok: false }; })
     : msg.type === "space-freeze" ? spaceFreeze(msg.groupId)
+    : msg.type === "space-container" ? spaceToContainer(Number(msg.groupId))
     : Promise.resolve(null);
   run.then(reply, (e) => reply({ ok: false, error: String(e && e.message ? e.message : e) }));
   return true;
@@ -2169,6 +2491,33 @@ function followRoute(tabId, url) {
 // for a new tab, tabs.onCreated with the address still pending.
 chrome.webNavigation.onErrorOccurred.addListener((d) => {
   if (d.frameId === 0) followRoute(d.tabId, d.url);
+});
+
+// !bangs (bangs.js). Redirect rules in the browser's network layer rewrite a search that
+// carries a bang before the request leaves, so the engine's page never loads (owner: Google
+// flashed first). A search without a known bang matches nothing and goes on as usual. The
+// listener below is the fallback for engines the rules do not cover (Yahoo, Startpage...).
+const BANG_RULE_IDS = { from: 9000, to: 9999 };
+async function bangRulesApply() {
+  const { ownBangs = {}, bangsOn = true } = await chrome.storage.local.get({ ownBangs: {}, bangsOn: true });
+  const old = (await chrome.declarativeNetRequest.getDynamicRules()).map((r) => r.id).filter((id) => id >= BANG_RULE_IDS.from && id <= BANG_RULE_IDS.to);
+  const add = bangsOn ? bangRules(ownBangs, BANG_RULE_IDS.from).filter((r) => r.id <= BANG_RULE_IDS.to) : [];
+  await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: old, addRules: add }).catch((e) => console.warn("bang rules", e));
+}
+chrome.runtime.onInstalled.addListener(() => bangRulesApply());
+chrome.runtime.onStartup.addListener(() => bangRulesApply());
+chrome.storage.onChanged.addListener((c, area) => {
+  if (area === "local" && (c.ownBangs || c.bangsOn)) bangRulesApply();
+});
+
+chrome.webNavigation.onBeforeNavigate.addListener(async (d) => {
+  if (d.frameId !== 0 || !/[?&](q|p|query)=/.test(d.url) || !/(!|%21)/.test(d.url)) return;
+  const { ownBangs = {}, bangsOn = true } = await chrome.storage.local.get({ ownBangs: {}, bangsOn: true });
+  if (!bangsOn) return;
+  // What the rules redirect is not touched here: both at once raced (seen: Google loaded first).
+  if (coveredByRules(d.url, bangRules(ownBangs))) return;
+  const to = bangTarget(d.url, ownBangs);
+  if (to) chrome.tabs.update(d.tabId, { url: to }).catch(() => {});
 });
 chrome.tabs.onCreated.addListener((tab) => followRoute(tab.id, tab.pendingUrl || tab.url));
 // One run in three missed both of those (the worker was still starting), so a tab that
@@ -2253,6 +2602,25 @@ async function spaceFreeze(groupId) {
   if (!tabs.some((t) => t.active)) await chrome.tabGroups.update(groupId, { collapsed: true }).catch(() => {});
   return { ok: true, groupId, frozen: await freezeTheseNow(tabs.map((t) => t.id)) };
 }
+
+// The scratchpad (ui/scratch.html) in the side panel, from its shortcut.
+chrome.commands.onCommand.addListener(async (command, tab) => {
+  if (command !== "scratchpad" || IS_AGENT_BUILD) return;
+  const windowId = tab?.windowId ?? (await chrome.windows.getLastFocused({ windowTypes: ["normal"] }).catch(() => null))?.id;
+  if (windowId != null) await chrome.sidePanel.open({ windowId }).catch(() => {});
+});
+
+// The command bar (commandbar.js, ui/commandbar.html): a small window near the top of the
+// window it was called from.
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command !== "command-bar" || IS_AGENT_BUILD) return;
+  const w = await chrome.windows.getLastFocused({ windowTypes: ["normal"] }).catch(() => null);
+  const width = 640, height = 420;
+  await chrome.windows.create({
+    url: chrome.runtime.getURL(`ui/commandbar.html?w=${w?.id ?? ""}`), type: "popup", focused: true, width, height,
+    left: (w?.left ?? 0) + Math.max(0, Math.round(((w?.width ?? 1280) - width) / 2)), top: (w?.top ?? 0) + 90,
+  }).catch(() => {});
+});
 
 chrome.commands.onCommand.addListener(async (command) => {
   if (command !== "space-next" || IS_AGENT_BUILD) return;

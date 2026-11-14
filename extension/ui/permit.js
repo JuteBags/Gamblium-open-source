@@ -5,6 +5,13 @@
 import { permitStatus, permitShort, permitParts } from "./pages-logic.js";
 
 const demo = new URLSearchParams(location.search).has("demo");
+// settings: agents changing settings; logins: agents using the owner's saved logins.
+const what = new URLSearchParams(location.search).get("what") === "logins" ? "logins" : "settings";
+const WORDS = what === "logins"
+  ? { ask: "Allow agents to log in with your saved logins?", always: "Agents use your saved logins without asking", allowed: "Agents may use your saved logins for now", rule: "Agents ask before using your saved logins",
+      why: "An agent wants Gamblium to type one of your saved logins into a sign-in page. The agent never sees the password." }
+  : { ask: "Allow agents to change settings?", always: "Agents change settings without asking", allowed: "Agents may change settings for now", rule: "Agents ask before changing settings",
+      why: "A program working through Gamblium's command line wants to change browser or Gamblium settings." };
 const $ = (id) => document.getElementById(id);
 const el = (tag, props = {}, children = []) => {
   const e = Object.assign(document.createElement(tag), props);
@@ -33,12 +40,12 @@ function draw(view) {
   const asking = p.asks.length > 0;
   // A question only while something asks; otherwise the title is the rule in force and
   // there is no main button, only ways to change that rule.
-  $("permit-title").textContent = asking ? "Allow agents to change settings?"
-    : p.state === "always" ? "Agents change settings without asking"
-    : p.state === "allowed" ? "Agents may change settings for now"
-    : "Agents ask before changing settings";
+  $("permit-title").textContent = asking ? WORDS.ask
+    : p.state === "always" ? WORDS.always
+    : p.state === "allowed" ? WORDS.allowed
+    : WORDS.rule;
   $("why").textContent = asking
-    ? "A program working through Gamblium's command line wants to change browser or Gamblium settings."
+    ? WORDS.why
     : "Nothing is waiting for an answer. Change the rule here, or leave it.";
   $("notNow").hidden = !asking && p.state !== "allowed" && p.state !== "always";
   $("notNow").classList.toggle("primary", asking);
@@ -57,7 +64,7 @@ function draw(view) {
 }
 
 async function choose(minutes) {
-  const r = await native({ type: "permit-set", what: "settings", minutes });
+  const r = await native({ type: "permit-set", what, minutes });
   document.activeElement?.blur();
   if (r && r.ok) draw(r);
   else fail(r);
@@ -67,7 +74,7 @@ function fail(r) {
   $("now").textContent = (r && r.error) || "The helper did not answer. Is Gamblium installed?";
 }
 async function read() {
-  const r = await native({ type: "permit-get", what: "settings" });
+  const r = await native({ type: "permit-get", what });
   if (r && r.ok) draw(r);
   else fail(r);
 }

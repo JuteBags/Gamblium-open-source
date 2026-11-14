@@ -1,0 +1,5 @@
+/* Links on darkened websites (../darklinks.js): in the page from its first byte, so a marked
+   link is never painted in another colour first. The colours are the ones that darkening turns
+   into the chosen colour; content/darklinks.js sets the chosen pair on the root, these are cyan. */
+[data-gamblium-link] { color: var(--gamblium-link, #015461) !important; }
+a:visited[data-gamblium-link], a:visited [data-gamblium-link] { color: var(--gamblium-visited, #3f5873) !important; }

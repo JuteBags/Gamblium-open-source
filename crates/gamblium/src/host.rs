@@ -161,6 +161,8 @@ pub fn handle(req: &Value, browser_pid: Option<u32>) -> Result<Value, String> {
             let theme = folder.as_ref().and_then(|d| crate::launch::read_launch_theme(d));
             // True when the launcher handed freezing to the extension for this start.
             let freeze = folder.as_ref().map(|d| crate::launch::read_launch_freeze(d)).unwrap_or(false);
+            // True when light-only websites are darkened this start (their links get a readable colour).
+            let force_dark = folder.as_ref().map(|d| crate::launch::read_launch_force_dark(d)).unwrap_or(false);
             // False for test, agent and pen-test starts: no welcome page.
             let welcome = folder.as_ref().map(|d| crate::launch::read_launch_welcome(d)).unwrap_or(true);
             // The pen-test profile (`launch --pentest`): its pages put developer tools first.
@@ -173,7 +175,7 @@ pub fn handle(req: &Value, browser_pid: Option<u32>) -> Result<Value, String> {
             let brave_version = folder.as_ref().and_then(|d| std::fs::read_to_string(d.join("Last Version")).ok()).and_then(|t| brave_version_of(&t));
             // Installed anew (not updated): the welcome page shows again, once (owner, Nov 14 2026).
             let new_install = folder.as_ref().is_some_and(|d| d.join(WELCOME_AGAIN).is_file());
-            Ok(json!({ "version": env!("CARGO_PKG_VERSION"), "browserPid": browser_pid, "userDataDir": dir, "theme": theme, "freeze": freeze, "welcome": welcome, "pentest": pentest, "braveVersion": brave_version, "newInstall": new_install }))
+            Ok(json!({ "version": env!("CARGO_PKG_VERSION"), "browserPid": browser_pid, "userDataDir": dir, "theme": theme, "freeze": freeze, "welcome": welcome, "pentest": pentest, "braveVersion": brave_version, "newInstall": new_install, "forceDark": force_dark }))
         }
         // The welcome page was opened for a new install: forget the request.
         "welcome-done" => {
@@ -310,6 +312,38 @@ pub fn handle(req: &Value, browser_pid: Option<u32>) -> Result<Value, String> {
         // `permit-check` is what a settings command asks before it acts; with
         // no permission in force the question is written down and shown in
         // the user's own Gamblium, if that is open.
+        // Logins agents may use (logins.rs): kept, listed and removed only from the owner's own
+        // browser; handed to the extension for one page, only with the owner's yes.
+        "login-list" | "login-save" | "login-remove" => {
+            if profile_of(browser_pid).is_some_and(|d| std::path::Path::new(&d).join(crate::launch::AGENT_MARKER).is_file()) {
+                return Err("logins for agents are kept in the owner's own Gamblium, not from an agent's browser".into());
+            }
+            let s = |k: &str| req[k].as_str().unwrap_or("").to_owned();
+            match req["type"].as_str().unwrap_or("") {
+                "login-list" => crate::logins::list(),
+                "login-save" => crate::logins::save(&s("site"), &s("username"), &s("password")),
+                _ => crate::logins::remove(&s("site"), &s("username")),
+            }
+        }
+        "login-fill" => {
+            let host = req["host"].as_str().ok_or("'host' (the page's) is missing")?;
+            let now = crate::permit::now();
+            let mut state = crate::permit::load();
+            if !crate::permit::allowed(&state, "logins", now) {
+                let profile = profile_of(browser_pid).map(|d| profile_label(&d)).unwrap_or_else(|| "an agent".into());
+                let show = crate::permit::ask(&mut state, "logins", &format!("login {host}"), &profile, now)?;
+                crate::permit::save(&state)?;
+                let open = users_gamblium_is_open();
+                if show && open {
+                    show_in_users_gamblium("ui/permit.html?what=logins");
+                }
+                return Ok(json!({ "allowed": false, "asked": open }));
+            }
+            match crate::logins::get(host, req["username"].as_str())? {
+                Some((site, username, password)) => Ok(json!({ "allowed": true, "site": site, "username": username, "password": password })),
+                None => Ok(json!({ "allowed": true, "none": true })),
+            }
+        }
         "permit-check" => {
             let what = req["what"].as_str().unwrap_or("settings");
             let now = crate::permit::now();
@@ -377,8 +411,31 @@ pub fn handle(req: &Value, browser_pid: Option<u32>) -> Result<Value, String> {
             Ok(json!({ "text": crate::vault::open_text(&key, crate::vault::Purpose::Sessions, label, &blob)? }))
         }
         // Downloads handed to our own downloader (see dl.rs).
-        "dl-start" => crate::dl::start(req, &download_profile(browser_pid)),
+        "dl-start" => {
+            // Taken before the browser chose a folder (no visible hand-over): the profile's own
+            // download folder, plus the folder of a routing rule.
+            let mut req = req.clone();
+            if req["dir"].as_str().unwrap_or("").is_empty() {
+                let profile = profile_of(browser_pid).map(std::path::PathBuf::from).or_else(crate::launch::default_user_data_dir);
+                // Agents' sessions save into a folder of their own, not loose in the owner's
+                // Downloads (tester, Nov 14 2026).
+                let agent_dir = profile.as_deref().and_then(crate::dl::agent_download_folder);
+                let base = agent_dir
+                    .or_else(|| profile.and_then(|p| crate::dl::profile_download_dir(&p)))
+                    .or_else(|| std::env::var_os("USERPROFILE").map(|h| std::path::PathBuf::from(h).join("Downloads")));
+                let dir = match (base, req["folder"].as_str().and_then(crate::dl::plain_folder)) {
+                    (Some(b), Some(f)) => Some(b.join(f)),
+                    (b, _) => b,
+                };
+                if let Some(d) = dir {
+                    req["dir"] = json!(d.to_string_lossy());
+                }
+            }
+            crate::dl::start(&req, &download_profile(browser_pid))
+        }
         "dl-list" => crate::dl::list(&download_profile(browser_pid)),
+        // Accounts and saved-login sites of the other browsers on this computer (never a password).
+        "bring-scan" => Ok(crate::bring::scan()),
         "dl-cancel" | "dl-resume" | "dl-forget" => {
             let id = req["id"].as_str().unwrap_or("");
             crate::dl::mine(id, &download_profile(browser_pid))?;
@@ -554,7 +611,7 @@ fn send(out: &Out, value: &Value) -> io::Result<()> {
 }
 
 /// One command from a client: a single line of JSON in, a single line out.
-fn serve_client(stream: TcpStream, token: &str, out: &Out, pending: &Pending, next_id: &AtomicU64) {
+fn serve_client(stream: TcpStream, token: &str, out: &Out, pending: &Pending, next_id: &AtomicU64, who: &str) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let mut line = String::new();
     let reply = match BufReader::new(&stream).take(MAX_REPLY as u64).read_line(&mut line) {
@@ -564,11 +621,14 @@ fn serve_client(stream: TcpStream, token: &str, out: &Out, pending: &Pending, ne
                 let (tx, rx) = mpsc::channel();
                 pending.lock().unwrap().insert(id, tx);
                 let wait = Duration::from_millis(req["timeout_ms"].as_u64().unwrap_or(30_000).min(120_000));
+                let began = std::time::Instant::now();
                 let answer = match send(out, &json!({ "type": "ctl", "id": id, "cmd": req["cmd"] })) {
                     Ok(()) => rx.recv_timeout(wait).unwrap_or_else(|_| json!({ "ok": false, "error": "the browser did not answer in time" })),
                     Err(e) => json!({ "ok": false, "error": format!("the browser is gone: {e}") }),
                 };
                 pending.lock().unwrap().remove(&id);
+                // What the agent did, for the owner to read (agentlog.rs).
+                crate::agentlog::write(who, &req["cmd"], &answer, began.elapsed().as_millis());
                 answer
             }
             Ok(_) => json!({ "ok": false, "error": "wrong token" }),
@@ -655,11 +715,12 @@ fn start_bridge(browser_pid: Option<u32>, out: &Out, pending: &Pending) -> Resul
     });
     std::fs::write(&file, serde_json::to_string(&info).unwrap()).map_err(|e| e.to_string())?;
     let (out, pending) = (out.clone(), pending.clone());
+    let who = user_data_dir.as_deref().map(profile_label).unwrap_or_else(|| "the main profile".into());
     std::thread::spawn(move || {
         let next_id = Arc::new(AtomicU64::new(1));
         for stream in listener.incoming().flatten() {
-            let (token, out, pending, next_id) = (token.clone(), out.clone(), pending.clone(), next_id.clone());
-            std::thread::spawn(move || serve_client(stream, &token, &out, &pending, &next_id));
+            let (token, out, pending, next_id, who) = (token.clone(), out.clone(), pending.clone(), next_id.clone(), who.clone());
+            std::thread::spawn(move || serve_client(stream, &token, &out, &pending, &next_id, &who));
         }
     });
     Ok(port)
@@ -835,11 +896,11 @@ pub fn decode_base64(text: &str) -> Option<Vec<u8>> {
 /// else is text, whatever it looks like (a search for "42" stays a search).
 const NUMBER_KEYS: &[&str] = &[
     "tab", "window", "index", "max", "limit", "ms", "x", "y", "by", "left", "top", "width", "height", "port", "delaySec",
-    "lowMemoryDelaySec", "lowMemoryMb", "status",
+    "lowMemoryDelaySec", "lowMemoryMb", "status", "scrollx", "quality", "delay",
 ];
 const FLAG_KEYS: &[&str] = &[
     "wait", "background", "on", "submit", "gone", "cve", "errors", "closeAfter", "withPages", "withSettings", "enabled",
-    "routingEnabled", "secure", "httpOnly", "real", "full",
+    "routingEnabled", "secure", "httpOnly", "real", "full", "mobile",
 ];
 
 /// "tab=12 url=https://x wait=true" -> {"tab":12,"url":"https://x","wait":true}
@@ -861,8 +922,18 @@ pub fn parse_ctl_args(op: &str, pairs: &[String]) -> Result<Value, String> {
                 _ => return Err(format!("{k} must be true or false, not '{v}'")),
             }
         } else if k == "id" {
-            // A download id is a number; a recorded request's id is text that looks like one.
-            if op.starts_with("download") { json!(v.parse::<i64>().map_err(|_| format!("id must be a number, not '{v}'"))?) } else { json!(v) }
+            // A download id is Gamblium's own (16 hex characters, kept as text) or, for what only
+            // the browser can fetch (blob:, data:), the browser's number. A recorded request's id
+            // is text that looks like one.
+            if op.starts_with("download") {
+                if v.len() == 16 && v.chars().all(|c| c.is_ascii_hexdigit()) {
+                    json!(v.to_ascii_lowercase())
+                } else {
+                    json!(v.parse::<i64>().map_err(|_| format!("id must be a download's id, not '{v}'"))?)
+                }
+            } else {
+                json!(v)
+            }
         } else {
             json!(v)
         };

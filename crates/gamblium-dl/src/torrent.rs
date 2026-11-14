@@ -201,6 +201,7 @@ fn from_web_seed(o: &Options, seed: &WebSeed) {
         dir: o.dir.clone(),
         max_connections: o.max_connections,
         headers: Vec::new(), // a login for the torrent's site is not for another server
+        cookies: Vec::new(),
         json: o.json,
         quiet: o.quiet,
         give_up_after: WEB_SEED_SILENT,

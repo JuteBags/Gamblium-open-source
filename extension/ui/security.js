@@ -337,3 +337,54 @@ await refreshScope();
 refreshCapture();
 if (params.get('panel') === 'audit' && host) runAudit();
 if (params.get('panel') === 'capture') { $('testers').open = true; $('capStart').scrollIntoView(); }
+
+// ---- Decode and encode (decode.js): on this computer only ------------------------------
+import('../decode.js').then(({ OPS, readJwt, weakSecret }) => {
+  const input = $('decIn'), output = $('decOut'), note = $('decNote'), jwtBox = $('decJwt');
+  const show = (out, text = '') => {
+    output.value = out;
+    note.textContent = text;
+    $('decUse').hidden = !out;
+  };
+  let checking = 0;
+  const readToken = async () => {
+    const j = readJwt(input.value);
+    jwtBox.hidden = !j;
+    if (!j) return;
+    const t = j.times;
+    const lines = [
+      `JWT · ${j.alg || 'no alg'}` + (j.expired === true ? ' · expired' : j.expired === false ? ' · not expired' : ''),
+      ...(t.issued ? [`Issued ${t.issued}`] : []), ...(t.notBefore ? [`Not before ${t.notBefore}`] : []), ...(t.expires ? [`Expires ${t.expires}`] : []),
+    ];
+    jwtBox.replaceChildren(
+      el('p', { className: 'jwtline', textContent: lines.join(' · ') }),
+      ...j.warnings.map((w) => el('p', { className: 'warn', textContent: '⚠ ' + w })),
+      el('p', { className: 'muted', id: 'decWeak', textContent: /^HS/.test(j.alg) ? 'Trying common secrets…' : '' }),
+    );
+    show(JSON.stringify({ header: j.header, payload: j.payload }, null, 2), 'Header and payload');
+    if (/^HS/.test(j.alg)) {
+      const mine = ++checking;
+      const s = await weakSecret(j);
+      if (mine !== checking || !$('decWeak')) return;
+      $('decWeak').className = s ? 'warn' : 'muted';
+      $('decWeak').textContent = s ? `⚠ Signed with a common secret: "${s}". Anyone can make tokens this server accepts.` : 'Not signed with any of the common secrets tried.';
+    }
+  };
+  input.addEventListener('input', readToken);
+  for (const b of document.querySelectorAll('.decops button')) {
+    b.addEventListener('click', () => {
+      try {
+        const r = OPS[b.dataset.op](input.value);
+        show(r.out, r.note || b.textContent);
+      } catch (e) {
+        show('', e.message);
+      }
+    });
+  }
+  $('decUse').addEventListener('click', () => {
+    input.value = output.value;
+    readToken();
+    input.focus();
+  });
+});
+

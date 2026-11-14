@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Command bar</title>
+<link rel="stylesheet" href="tokens.css">
+<script src="scheme.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: var(--surface, #1c1f26); color: var(--text, #e8eaf0); font: 14px/1.4 var(--font-ui, "Segoe UI", system-ui, sans-serif); }
+  main { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+  input { margin: 12px; padding: 12px 14px; font: inherit; font-size: 16px; border-radius: var(--radius-control, 8px); border: 1px solid var(--border, #3a3f4b); background: var(--bg, #14161b); color: inherit; outline: none; }
+  input:focus { border-color: var(--accent, #7aa2ff); }
+  ul { list-style: none; margin: 0; padding: 0 8px 8px; overflow: auto; }
+  li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-md, 8px); cursor: pointer; }
+  li[aria-selected="true"] { background: color-mix(in srgb, var(--accent, #7aa2ff) 22%, transparent); }
+  .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .n { color: var(--text-muted, #a3a9b7); font-size: 12px; white-space: nowrap; }
+  .k { color: var(--text-muted, #a3a9b7); font-size: 12px; width: 52px; }
+</style>
+</head>
+<body>
+<main>
+  <input id="q" type="text" autocomplete="off" spellcheck="false" placeholder="Type an action, a tab or an address…" aria-label="Command" aria-controls="list">
+  <ul id="list" role="listbox" aria-label="Results"></ul>
+</main>
+<script type="module" src="commandbar.js"></script>
+</body>
+</html>

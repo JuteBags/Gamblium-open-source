@@ -3,6 +3,8 @@
 import { $, send, helper, el, say } from './page.js';
 import { DEFAULTS, describeTemp } from '../rules.js';
 import { OWN_DEFAULTS } from '../download-rules.js';
+import { parseBangs, bangsText } from '../bangs.js';
+import { LINK_SETS, LINK_DEFAULT, linkColours, shownAs } from '../darklinks.js';
 import { clampInt, parseHosts, proxyLocked, bridgeLine, COLOUR_SETS, setColours, findMatches, splitTheme, permitStatus, permitShort, permitParts, versionLabel } from './pages-logic.js';
 import { proxyLine } from './security-logic.js';
 
@@ -367,9 +369,8 @@ loadProfile();
 
 async function loadOwn() {
   const own = { ...OWN_DEFAULTS, ...(await chrome.storage.local.get(OWN_DEFAULTS)) };
-  for (const r of document.querySelectorAll('input[name="ownDownloader"]')) r.checked = r.value === own.ownDownloader;
-  $('ownMinMb').value = own.ownDownloaderMinMb;
-  $('ownMinField').hidden = own.ownDownloader !== 'big';
+  const mode = own.ownDownloader === 'off' ? 'off' : 'always';
+  for (const r of document.querySelectorAll('input[name="ownDownloader"]')) r.checked = r.value === mode;
   $('ownTorrents').checked = own.ownTorrents;
   $('seedMinutes').value = own.seedMinutes;
   $('seedMinutes').disabled = !own.ownTorrents;
@@ -378,14 +379,8 @@ for (const r of document.querySelectorAll('input[name="ownDownloader"]')) {
   r.addEventListener('change', async () => {
     if (!r.checked) return;
     await store({ ownDownloader: r.value });
-    $('ownMinField').hidden = r.value !== 'big';
   });
 }
-$('ownMinMb').addEventListener('change', () => {
-  const mb = clampInt($('ownMinMb').value, 1, 100000, OWN_DEFAULTS.ownDownloaderMinMb);
-  $('ownMinMb').value = mb;
-  store({ ownDownloaderMinMb: mb });
-});
 $('ownTorrents').addEventListener('change', async () => {
   await store({ ownTorrents: $('ownTorrents').checked });
   $('seedMinutes').disabled = !$('ownTorrents').checked;
@@ -438,10 +433,16 @@ document.addEventListener('visibilitychange', () => {
 // ---- One view per area -------------------------------------------------------------
 // The address picks the area (settings.html#network). "#all" shows every area on
 // one page, which is what the tests and a search of the page (Ctrl+F) want.
-const AREAS = ['tabs', 'look', 'downloads', 'network', 'agents', 'gamblium', 'profile', 'browser'];
+const AREAS = ['tabs', 'look', 'downloads', 'network', 'agents', 'gamblium', 'profile', 'browser', 'bring'];
+let bringShown = false;
 function showArea() {
   const asked = location.hash.slice(1);
   const area = asked === 'all' ? 'all' : AREAS.includes(asked) ? asked : 'tabs';
+  // The other browsers are looked at only when this area is opened.
+  if (area === 'bring' && !bringShown) {
+    bringShown = true;
+    import('./bring.js').then((m) => m.renderBring($('bringBox')));
+  }
   for (const sec of document.querySelectorAll('.area > section[data-area]')) sec.hidden = area !== 'all' && sec.dataset.area !== area;
   for (const a of document.querySelectorAll('.areas a')) {
     if (a.dataset.area === area) a.setAttribute('aria-current', 'page');
@@ -553,6 +554,92 @@ chrome.storage.local.get({ colourSet: null }).then(({ colourSet }) => {
   paintSets();
 });
 
+// ---- Links on darkened websites (../darklinks.js) ---------------------------------------
+// Stored as darkLinks: { set } or { set: 'own', link, visited }. Cyan unless changed.
+let darkLinks = { set: LINK_DEFAULT };
+function paintLinks() {
+  const shown = linkColours(darkLinks);
+  $('linkSets').replaceChildren(...LINK_SETS.map((s) => {
+    const dot = s.link ? `background: ${s.link}` : 'background: linear-gradient(135deg, #1a0dab 0 50%, #f5bdff 50% 100%)';
+    const b = el('button', { type: 'button', className: 'set link' }, [el('i', { style: dot }), s.name]);
+    b.setAttribute('aria-pressed', String(darkLinks.set === s.id));
+    b.addEventListener('click', () => saveLinks({ set: s.id }));
+    return b;
+  }));
+  if (shown) {
+    $('ownLink').value = shown.link;
+    $('ownVisited').value = shown.visited;
+  }
+  $('ownLink').disabled = $('ownVisited').disabled = !shown;
+  $('linkDemo').hidden = !shown;
+  if (shown) {
+    // What darkening really gives (a very light, vivid colour cannot be had exactly).
+    $('demoLink').style.color = shownAs(shown.link);
+    $('demoVisited').style.color = shownAs(shown.visited);
+  }
+}
+async function saveLinks(next) {
+  darkLinks = next;
+  await store({ darkLinks: next });
+  paintLinks();
+}
+const ownLinks = () => saveLinks({ set: 'own', link: $('ownLink').value, visited: $('ownVisited').value });
+$('ownLink').addEventListener('input', ownLinks);
+$('ownVisited').addEventListener('input', ownLinks);
+chrome.storage.local.get({ darkLinks: null }).then(({ darkLinks: d }) => {
+  if (d && typeof d === 'object') darkLinks = d;
+  paintLinks();
+});
+
 // Our own right-click menu on websites: on unless switched off here.
 chrome.storage.local.get({ ownRightClick: true }).then(({ ownRightClick }) => { $('ownRightClick').checked = ownRightClick; });
 $('ownRightClick').addEventListener('change', () => chrome.storage.local.set({ ownRightClick: $('ownRightClick').checked }));
+
+// ---- !bangs ---------------------------------------------------------------------------
+(async () => {
+  const { bangsOn = true, ownBangs = {} } = await chrome.storage.local.get({ bangsOn: true, ownBangs: {} });
+  $('bangsOn').checked = bangsOn;
+  $('ownBangs').value = bangsText(ownBangs);
+})();
+$('bangsOn').addEventListener('change', () => chrome.storage.local.set({ bangsOn: $('bangsOn').checked }));
+$('ownBangs').addEventListener('change', () => {
+  const own = parseBangs($('ownBangs').value);
+  chrome.storage.local.set({ ownBangs: own });
+  $('ownBangs').value = bangsText(own); // lines that were not a bang drop out, so it is visible
+});
+
+// ---- Logins agents may use (the helper keeps them sealed; logins.rs) --------------------
+async function loginsDraw(r) {
+  r = r || (await helper({ type: 'login-list' }));
+  const list = $('loginList');
+  if (!r || r.ok === false) {
+    list.replaceChildren(el('li', { className: 'hint', textContent: (r && r.error) || 'The helper did not answer.' }));
+    return;
+  }
+  list.replaceChildren(...(r.logins.length ? r.logins.map((l) => {
+    const rm = el('button', { type: 'button', className: 'quiet', textContent: 'Remove' });
+    rm.addEventListener('click', async () => loginsDraw(await helper({ type: 'login-remove', site: l.site, username: l.username })));
+    return el('li', {}, [el('span', { className: 'mono', textContent: l.site }), el('span', { className: 'hint', textContent: l.username || '(no user name)' }), rm]);
+  }) : [el('li', { className: 'hint', textContent: 'None yet.' })]));
+}
+$('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const r = await helper({ type: 'login-save', site: $('loginSite').value, username: $('loginUser').value, password: $('loginPass').value });
+  $('loginPass').value = '';
+  if (r && r.ok !== false) {
+    $('loginSite').value = '';
+    $('loginUser').value = '';
+    $('loginSaid').textContent = 'Saved.';
+    loginsDraw(r);
+  } else {
+    $('loginSaid').textContent = (r && r.error) || 'Not saved.';
+  }
+});
+loginsDraw();
+
+// ---- Video pops out when its tab is left ------------------------------------------------
+chrome.storage.local.get({ popOutVideo: true }).then(({ popOutVideo }) => { $('popOutVideo').checked = popOutVideo; });
+$('popOutVideo').addEventListener('change', () => chrome.storage.local.set({ popOutVideo: $('popOutVideo').checked }));
+chrome.storage.local.get({ peekOn: true }).then(({ peekOn }) => { $('peekOn').checked = peekOn; });
+$('peekOn').addEventListener('change', () => chrome.storage.local.set({ peekOn: $('peekOn').checked }));
+

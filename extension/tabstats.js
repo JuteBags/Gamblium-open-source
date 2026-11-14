@@ -157,3 +157,24 @@ export function proxySummary(config) {
   }
   return { mode: "other" };
 }
+
+// A group's icon (owner, Nov 14 2026: custom group icons): Chromium's groups have only a name
+// and a colour, so the icon is an emoji at the start of the name, which the tab strip shows.
+const ICON_AT_START = /^(\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic}️?)*)\s*/u;
+
+/** "🎵 Music" -> { icon: "🎵", name: "Music" }; no icon -> { icon: "", name }. */
+export function splitGroupIcon(title) {
+  const t = String(title ?? "");
+  const m = ICON_AT_START.exec(t);
+  return m ? { icon: m[1], name: t.slice(m[0].length) } : { icon: "", name: t };
+}
+
+/** The title with `icon` in front (or none): the name itself is kept. */
+export function withGroupIcon(title, icon) {
+  const { name } = splitGroupIcon(title);
+  const i = String(icon ?? "").trim();
+  return i ? (name ? `${i} ${name}` : i) : name;
+}
+
+/** The icons offered; any emoji works. */
+export const GROUP_ICONS = ["💼", "🏠", "🧪", "🛠️", "📚", "🎵", "🎬", "🛒", "💬", "📧", "📰", "💰", "✈️", "🎮", "🧠", "🐞", "🔒", "📊", "🎨", "⭐", "🔥", "🌱", "🤖", "📌"];

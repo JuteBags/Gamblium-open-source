@@ -16,7 +16,25 @@ const want = createHash('sha256').update(body).digest('hex');
 // mode: { perConn: bytes/s or 0, maxConns: n or 0, ranges: bool, breakAfter: bytes or 0 }
 let mode = {};
 let open = 0, peak = 0, served = 0, refused = 0;
+// Signed addresses (GitHub, Drive): /login/x needs the cookie s=secret and sends us to
+// http://[::1]:PORT/signed/<token>/x; /expiring/x does the same without a login. A token
+// is good for mode.ttl ms (default a minute); after that it answers 403.
+let tokens = new Map(), issued = 0, leaked = 0, loginRefused = 0;
 const server = createServer((req, res) => {
+  const signIn = /^\/(login|expiring)\//.exec(req.url);
+  if (signIn) {
+    if (signIn[1] === 'login' && !/(^|; )s=secret(;|$)/.test(req.headers.cookie || '')) { loginRefused++; res.writeHead(403); return res.end(); }
+    const token = randomBytes(6).toString('hex');
+    tokens.set(token, Date.now() + (mode.ttl || 60000));
+    issued++;
+    res.writeHead(302, { Location: `http://[::1]:${other.address().port}/signed/${token}/${req.url.slice(signIn[0].length)}` });
+    return res.end();
+  }
+  const signed = /^\/signed\/([0-9a-f]+)\//.exec(req.url);
+  if (signed) {
+    if (req.headers.cookie) leaked++;
+    if (!(tokens.get(signed[1]) > Date.now())) { res.writeHead(403); return res.end(); }
+  }
   if (req.url.startsWith('/named')) res.setHeader('Content-Disposition', 'attachment; filename="named file.bin"');
   if (mode.maxConns && open >= mode.maxConns) {
     refused++;
@@ -55,19 +73,26 @@ const server = createServer((req, res) => {
   step();
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
+// The same files under a second host name ([::1]), for redirects to "another site".
+const other = createServer((req, res) => server.emit('request', req, res));
+await new Promise((r) => other.listen(0, '::1', r));
 const base = `http://127.0.0.1:${server.address().port}`;
 
 const dir = mkdtempSync(join(tmpdir(), 'gdl-'));
 let pass = 0, fail = 0;
 const check = (name, ok, extra = '') => { ok ? pass++ : fail++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}${extra ? '  ' + extra : ''}`); };
 const sha = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
+const homes = new Set();
 function run(urls, args = [], m = {}) {
   mode = m; open = 0; peak = 0; served = 0; refused = 0;
   const t = Date.now();
   // The server lives in this process, so the downloader must not block it: spawnSync would.
   return new Promise((done) => {
     import('node:child_process').then(({ spawn }) => {
-      const p = spawn(exe, [...urls, '--dir', dir, '--json', ...args]);
+      // Each run learns into its own folder (servers.json) unless a test shares one on purpose.
+      const home = m.home || mkdtempSync(join(tmpdir(), 'gdl-home-'));
+      homes.add(home);
+      const p = spawn(exe, [...urls, '--dir', dir, '--json', ...args], { env: { ...process.env, LOCALAPPDATA: home, ...(m.env || {}) } });
       let out = '';
       p.stdout.on('data', (d) => (out += d));
       p.stderr.on('data', (d) => (out += d));
@@ -82,10 +107,26 @@ function run(urls, args = [], m = {}) {
 let r = await run([`${base}/fast.bin`]);
 check('fast server: file arrives whole', r.code === 0 && sha(join(dir, 'fast.bin')) === want, `${r.secs.toFixed(1)} s, peak ${r.peak} connection(s)`);
 
-r = await run([`${base}/slow.bin`], [], { perConn: 2 * 1024 * 1024 });
+const learnHome = mkdtempSync(join(tmpdir(), 'gdl-home-'));
+r = await run([`${base}/slow.bin`], [], { perConn: 2 * 1024 * 1024, home: learnHome });
 const single = SIZE / (2 * 1024 * 1024);
 check('slow per connection: more connections are added', r.code === 0 && r.peak >= 4 && sha(join(dir, 'slow.bin')) === want, `peak ${r.peak}`);
 check('slow per connection: at least twice as fast as one connection', r.secs < single / 2, `${r.secs.toFixed(1)} s against ${single.toFixed(0)} s on one`);
+
+const learnt = JSON.parse(readFileSync(join(learnHome, 'Gamblium', 'downloads', 'servers.json'), 'utf8'))[0];
+r = await run([`${base}/slow-again.bin`], [], { perConn: 2 * 1024 * 1024, home: learnHome });
+const firstTick = r.lines.find((l) => l.event === 'progress');
+check('the same server again: starts at the count found last time', r.code === 0 && learnt.connections >= 4 && firstTick && firstTick.connections >= learnt.connections / 2 && sha(join(dir, 'slow-again.bin')) === want, `learnt ${learnt.connections}, first second on ${firstTick && firstTick.connections}, ${r.secs.toFixed(1)} s`);
+
+// Signed in, then sent to a signed address on another host: the cookie goes to the site only.
+tokens = new Map(); issued = 0; leaked = 0; loginRefused = 0;
+r = await run([`${base}/login/signed-in.bin`], [], { perConn: 8 * 1024 * 1024, env: { GAMBLIUM_DL_COOKIE: JSON.stringify({ '127.0.0.1': 's=secret' }) } });
+check('signed in + redirect: whole, and the cookie never reaches the other host', r.code === 0 && sha(join(dir, 'signed-in.bin')) === want && leaked === 0 && loginRefused === 0 && issued >= 1, `${issued} signed address(es), ${leaked} request(s) with a cookie at the other host`);
+// The signed address runs out half-way: a fresh one is fetched from the address asked.
+tokens = new Map(); issued = 0; leaked = 0;
+r = await run([`${base}/expiring/expiring.bin`], ['-x', '4'], { perConn: 2 * 1024 * 1024, ttl: 4000 });
+if (process.env.GDL_TRACE) console.log(r.lines.filter((l) => l.event === 'progress').map((l) => l.connections + '@' + (l.speed / 1048576).toFixed(1)).join(' '), JSON.stringify(r.lines.filter((l) => l.event !== 'progress')));
+check('signed address runs out mid-download: renewed, whole', r.code === 0 && sha(join(dir, 'expiring.bin')) === want && issued >= 2, `${issued} signed address(es), ${r.secs.toFixed(1)} s${r.code ? ' ' + JSON.stringify(r.last).slice(0, 200) : ''}`);
 
 r = await run([`${base}/strict.bin`], [], { perConn: 4 * 1024 * 1024, maxConns: 3 });
 check('server that refuses a 4th connection: still whole', r.code === 0 && sha(join(dir, 'strict.bin')) === want, `refused ${r.refused} request(s), ${r.secs.toFixed(1)} s`);
@@ -115,6 +156,8 @@ r = await run(['ftp://example.org/file.bin']);
 check('an address that is neither web, magnet nor torrent is refused', r.code === 2);
 
 server.close();
+other.close();
 rmSync(dir, { recursive: true, force: true });
+for (const h of homes) rmSync(h, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

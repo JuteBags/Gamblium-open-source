@@ -74,9 +74,16 @@ A stopped session starts by itself, hidden, when you send it a command.
     new tab, and if it is still the check, hand it to the person.
   - **A check that wants a click or a picture:** a person's job. Ask them to
     `gamblium-cli open <name>`, pass it, and tell you; then `hide`.
-- **Never type a person's password.** Ask them to sign in in the session's
-  window. After a sign-in, prove it held (open an account page and read it,
-  or `cookies url=...`) before `close` or `hide`.
+- **Never type a person's password.** On a site's sign-in page, `login`
+  signs in with a login the person saved for agents (Settings > Agents) and
+  you never see it; the person allows it once (a question opens in their
+  Gamblium). Without a saved login, ask them to sign in in the session's
+  window. Google's sign-in refuses automation: the person signs in once in
+  the session's window. After a sign-in, prove it held (open an account page
+  and read it, or `cookies url=...`) before `close` or `hide`.
+- **What you did is logged** for the person (`Gamblium\agent-logs`, one line
+  per command; typed text shows as its length). Tell them what matters; the
+  log is there to check.
 - **Keep the tab id `open` gave you** and pass `tab=<id>` on every page
   command. Without `tab=` a command goes to the tab that is showing, which
   changes when you open another one.

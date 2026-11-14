@@ -8,6 +8,7 @@ import {
   CARDS, cardSize, moveCard, nudgeCard, sizeCard, snapSize, rowsFor, readLayout,
 } from './logic.js';
 import { $, el, send, openPage } from '../ui/page.js';
+import { showUpdateBanner } from '../ui/update-banner.js';
 import { GROUP_COLOURS } from '../ui/pages-logic.js';
 import { siteIcon, siteIconEl, monogram, guardIcon } from '../site-icons.js';
 import { resolve, suggestRoutes } from '../routes.js'; // also brings the stored colour scheme up to date
@@ -1047,3 +1048,16 @@ for (const ev of ['onCreated', 'onRemoved', 'onAttached', 'onDetached', 'onActiv
 chrome.tabs.onUpdated.addListener((id, change) => { if ('groupId' in change || 'discarded' in change) spacesLater(); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { spacesPainted = ''; paintSpaces(); } });
 paintSpaces();
+
+// An update that is ready: across the top of the page, with "Later" for this version.
+{
+  const main = document.querySelector('main');
+  if (main) {
+    showUpdateBanner(main, { later: true }).catch(() => {});
+    // Downloaded while this page is open: shown then.
+    chrome.storage.onChanged.addListener((c, area) => {
+      if (area === 'local' && c.updateReady && !document.querySelector('.gamblium-update')) showUpdateBanner(main, { later: true }).catch(() => {});
+    });
+  }
+}
+

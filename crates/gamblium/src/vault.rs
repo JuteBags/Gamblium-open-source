@@ -35,6 +35,8 @@ pub enum Purpose {
     Downloads,
     /// Saved sessions and checkpoints (typed text, page state).
     Sessions,
+    /// Logins the owner lets agents use without reading them (logins.rs).
+    Logins,
 }
 
 impl Purpose {
@@ -42,6 +44,7 @@ impl Purpose {
         match self {
             Purpose::Downloads => "downloads",
             Purpose::Sessions => "sessions",
+            Purpose::Logins => "logins",
         }
     }
 }
