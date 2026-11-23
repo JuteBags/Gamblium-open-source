@@ -50,10 +50,15 @@ pub fn site_of(text: &str) -> Option<String> {
     (host.contains('.') && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')).then_some(host)
 }
 
-/// Whether a page's host belongs to a saved site (the site itself or one of its subdomains).
+/// Whether a page's host is the saved site itself (www. aside). Not its subdomains: a login saved
+/// for google.com was typed into sites.google.com, a page anyone can make (review 2, 1.6).
 pub fn host_matches(host: &str, site: &str) -> bool {
     let h = host.trim_start_matches("www.").to_ascii_lowercase();
-    h == site || h.ends_with(&format!(".{site}"))
+    let site = site.trim_start_matches("www.").to_ascii_lowercase();
+    // A site's own sign-in host fills too (accounts.google.com for google.com; review 4, B10);
+    // any other subdomain does not.
+    const SIGN_IN: &[&str] = &["accounts.", "login.", "signin.", "auth.", "id.", "sso."];
+    h == site || SIGN_IN.iter().any(|p| h == format!("{p}{site}"))
 }
 
 /// Sites and user names, never a password.
@@ -104,7 +109,10 @@ mod tests {
         assert_eq!(site_of("localhost"), None);
         assert_eq!(site_of("evil.com\"; x"), None);
         assert!(host_matches("github.com", "github.com"));
-        assert!(host_matches("gist.github.com", "github.com"));
+        assert!(!host_matches("gist.github.com", "github.com"), "subdomains are other sites");
+        assert!(host_matches("www.github.com", "github.com"));
+        assert!(host_matches("accounts.google.com", "google.com"), "a site's own sign-in host");
+        assert!(!host_matches("sites.google.com", "google.com"));
         assert!(!host_matches("github.com.evil.org", "github.com"));
         assert!(!host_matches("notgithub.com", "github.com"));
     }

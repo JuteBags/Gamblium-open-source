@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bangTarget, splitBang } from './bangs.js';
+import { bangRules, bangTarget, splitBang } from './bangs.js';
 
 test('a bang before or after the words sends the search to that site', () => {
   assert.equal(bangTarget('https://www.google.com/search?q=!w+moon+landing'), 'https://en.wikipedia.org/w/index.php?search=moon%20landing');
@@ -56,7 +56,38 @@ test('the redirect rules send the request straight to the bang site', async () =
   assert.equal(apply('https://www.google.com/search?q=%21gh'), 'https://github.com/search?q=&type=repositories');
   assert.equal(apply('https://www.google.com/search?q=moon'), null);
   assert.equal(apply('https://www.google.com/search?q=what+is+5%21+x'), null);
-  assert.equal(apply('https://www.google.com/search?q=%21wiki+x'), 'https://en.wikipedia.org/w/index.php?search=x'); // !wiki is not "!w" + "iki"
+  assert.equal(apply('https://www.google.com/search?q=%21wiki+x'), null); // "!wiki" is not "!w" + "iki" (and no longer a bang)
   assert.ok(rules.every((r) => r.condition.regexFilter.length < 400));
   assert.equal(new Set(rules.map((r) => r.id)).size, rules.length);
+});
+
+test('!gmail, !gmail1.. and !hf go where they should, by rule and by the fallback', () => {
+  const rules = bangRules();
+  const go = (url) => {
+    const r = rules.find((x) => new RegExp(x.condition.regexFilter).test(url));
+    const m = r && new RegExp(r.condition.regexFilter).exec(url);
+    return m ? r.action.redirect.regexSubstitution.replace(/\\1/g, () => m[1] ?? '') : null;
+  };
+  assert.equal(go('https://www.google.com/search?q=%21gmail+from%3Abank&sourceid=chrome'), 'https://mail.google.com/mail/u/0/#search/from%3Abank');
+  assert.equal(go('https://www.google.com/search?q=%21gmail1+invoice+march'), 'https://mail.google.com/mail/u/1/#search/invoice+march');
+  assert.equal(go('https://www.google.com/search?q=invoice+%21Gmail2'), 'https://mail.google.com/mail/u/2/#search/invoice');
+  assert.equal(go('https://www.google.com/search?q=%21hf+llama'), 'https://huggingface.co/models?search=llama');
+  assert.equal(bangTarget('https://www.google.com/search?q=!gmail3+tax'), 'https://mail.google.com/mail/u/3/#search/tax');
+  assert.ok(rules.length <= 1000 && rules.at(-1).id <= 9999, `${rules.length} rules`);
+});
+
+test('bangOffer: the bang search and its name, or the bangs a prefix fits', async () => {
+  const { bangOffer } = await import('./bangs.js');
+  assert.deepEqual(bangOffer('!gh rustc'), { kind: 'bang', bang: 'gh', name: 'GitHub', query: 'rustc', url: 'https://github.com/search?q=rustc&type=repositories' });
+  assert.equal(bangOffer('rustc !GH').bang, 'gh');
+  assert.equal(bangOffer('!gmail1 tax').name, 'Gmail u/1');
+  const g = bangOffer('!g');
+  assert.equal(g.kind, 'bangs');
+  assert.equal(g.list[0].bang, 'gh'); // the shortest first
+  assert.ok(!g.list.some((b) => b.bang === 'g')); // plain searches go to Google already
+  assert.ok(g.list.some((b) => b.bang === 'gh' && b.name === 'GitHub'));
+  assert.equal(bangOffer('!w').list.filter((b) => b.name === 'Wikipedia').length, 1); // !w and !wiki: one line
+  assert.equal(bangOffer('!jira x', { jira: 'https://acme.atlassian.net/?q=%s' }).name, 'acme.atlassian.net');
+  assert.equal(bangOffer('hello'), null);
+  assert.equal(bangOffer('!zzzz'), null);
 });

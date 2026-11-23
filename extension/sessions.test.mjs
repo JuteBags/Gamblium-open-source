@@ -194,3 +194,19 @@ test("every saved page knows the sessions it is in, newest first", () => {
   assert.equal(map["github.com"], undefined);
   assert.deepEqual(sessionsByUrl(null), {});
 });
+
+test('matchSession: the open tabs are a saved session come back (window ids do not count)', async () => {
+  const { matchSession } = await import('./sessions.js');
+  const sess = (name, savedAt, urls) => ({ name, savedAt, windows: [{ tabs: urls.map((url) => ({ url })) }] });
+  const store = {
+    'Main Session': sess('Main Session', 2, ['https://github.com/a', 'https://mail.google.com/mail/u/0/', 'https://www.youtube.com/watch?v=1', 'https://huggingface.co/x']),
+    Work: sess('Work', 1, ['https://jira.example.com/', 'https://docs.example.com/']),
+  };
+  // Same tabs (www and a trailing slash do not matter), one tab added since.
+  const m = matchSession(store, ['https://github.com/a/', 'https://mail.google.com/mail/u/0/', 'https://youtube.com/watch?v=1', 'https://huggingface.co/x', 'https://example.org/new']);
+  assert.equal(m.name, 'Main Session');
+  assert.equal(m.same, 4);
+  assert.equal(matchSession(store, ['https://github.com/a', 'https://news.example/']), null); // too different
+  assert.equal(matchSession(store, []), null);
+  assert.equal(matchSession({}, ['https://github.com/a']), null);
+});

@@ -9,7 +9,7 @@ import { guardIcon } from '../site-icons.js';
 import {
   fmtAgo, checkpointName, sessionSites, savedLine, restoredLine, exportFileName,
   nowShape, stripOf, sessionWhen, filterSessions, sessionFacts, sessionTabs, GROUP_COLOURS,
-  namedNameError, proxyAddress, namedView, namedActionLabel, filterNamed, namedDeleteQuestion, siteLabel,
+  namedNameError, nameKey, proxyAddress, namedView, namedActionLabel, filterNamed, namedDeleteQuestion, siteLabel,
 } from './pages-logic.js';
 
 const demo = new URLSearchParams(location.search).has('demo');
@@ -28,7 +28,8 @@ const full = new Map(); // name -> the whole session, read when it is opened
 // ---- A window as a row of site icons -------------------------------------------------
 
 const icon = (t, size = 16) => {
-  const img = guardIcon(el('img', { alt: '', width: size, height: size, loading: 'lazy', src: chrome.runtime.getURL(`_favicon/?pageUrl=${encodeURIComponent(t.url)}&size=32`) }));
+  const own = typeof t.icon === 'string' && /^(https:|data:image\/)/.test(t.icon) ? t.icon : null;
+  const img = guardIcon(el('img', { alt: '', width: size, height: size, loading: 'lazy', src: own || chrome.runtime.getURL(`_favicon/?pageUrl=${encodeURIComponent(t.url)}&size=32`) }));
   const chip = el('span', { className: 'tabicon' }, img);
   if (t.pinned) chip.dataset.pinned = '';
   if (t.asleep) chip.dataset.asleep = '';
@@ -57,16 +58,29 @@ function windowRow(win, limit, hits = null) {
 // A helper without them answers ok:false and this part of the page stays away.
 
 let named = [];
+let mainGamblium = null; // the owner's own Gamblium, as the helper lists it ("default")
+let mainSets = []; // its saved tab sets, mirrored (cli-view.sealed)
+// The session this page runs in, if it is one (owner, Nov 16 2026: opened in the Work window the
+// page called Work "This Gamblium" and listed it again under Active, and the owner's own Gamblium
+// was nowhere).
+const mySession = () => { try { return myPid ? named.find((s) => s.pid && s.pid === myPid) : null; } catch { return null; } }; // myPid is declared further down
 let busy = null; // the name being started, opened, hidden or stopped
 let editing = null; // the name whose proxy is being changed
 let namedConfirm = null; // the name whose Delete was pressed once
+let namedShown = null; // the session whose tabs are listed
 
-const namedCall = (...args) => (demo ? DEMO_NAMED(args) : send({ type: 'native', request: { type: 'named-sessions', args } }));
+// Sessions are sent to the helper by id (#k3f9qa), never by name: an id is exact and never changes.
+const idOf = (name) => { const s = named.find((x) => x.name === name); return s?.id ? `#${s.id}` : name; };
+const byId = (args) => (args[0] === 'create' ? args : args.map((a, i) => (i === 1 && !(args[0] === 'fork') ? idOf(a) : a.startsWith('from=') ? `from=${idOf(a.slice(5))}` : a)));
+const namedCall = (...args) => (demo ? DEMO_NAMED(args) : send({ type: 'native', request: { type: 'named-sessions', args: byId(args) } }));
 
 async function readNamed() {
   const r = await namedCall('list');
   const ok = r?.ok !== false && Array.isArray(r?.sessions);
-  named = ok ? r.sessions : [];
+  const showTests = new URLSearchParams(location.search).has('tests');
+  named = ok ? r.sessions.filter((s) => (showTests || !s.test) && !s.temp) : [];
+  mainGamblium = ok ? r.default || null : null;
+  mainSets = ok && Array.isArray(r.tabSets) ? r.tabSets : [];
   // No answer at all: the panel stays away. An answer that fails after it was there keeps it, to show why.
   if (ok) $('named').hidden = false;
   renderNamed();
@@ -79,16 +93,77 @@ const picked = new Set(); // names ticked for deleting together
 let pickedConfirm = false;
 
 function renderNamed() {
-  $('namedCount').textContent = named.length ? String(named.length) : '';
-  $('namedNone').hidden = named.length > 0;
+  $('namedNone').hidden = true;
   for (const n of [...picked]) if (!named.some((s) => s.name === n)) picked.delete(n);
-  $('namedTools').hidden = named.length < 6;
+  $('namedTools').hidden = named.length < 1;
   renderPicked();
   if ($('namedRows').contains(document.activeElement) && document.activeElement.tagName === 'INPUT' && document.activeElement.type !== 'checkbox') return; // someone is typing a proxy
   const shown = filterNamed(named, namedQuery);
   $('namedNomatch').hidden = !(named.length && !shown.length);
   $('namedRows').classList.toggle('picking', picked.size > 0);
-  $('namedRows').replaceChildren(...shown.map((s) => {
+  const want = (s) => filter === 'all' || (filter === 'named' && s.named !== false) || (filter === 'unnamed' && s.named === false);
+  const me = mySession();
+  const active = shown.filter((s) => s.state !== 'stopped' && want(s) && s !== me);
+  // In a session, the owner's own Gamblium is another browser that is running: listed here.
+  const own = me && mainGamblium?.state === 'running' && filter === 'all' ? [mainRow(mainGamblium)] : [];
+  // Closed, it is an inactive session like any other (owner, Nov 16 2026: it vanished from the list).
+  const ownClosed = me && mainGamblium && mainGamblium.state !== 'running' && filter === 'all' && filterNamed([{ name: mainGamblium.named ? mainGamblium.name : 'Your Gamblium', tabs: (mainGamblium.windows || []).flatMap((w) => w.tabs || []) }], namedQuery).length ? [mainRow(mainGamblium)] : [];
+  const inactive = shown.filter((s) => s.state === 'stopped' && want(s));
+  const anon = privateWindows > 0 && filter === 'all' ? [el('li', { className: 'nsess anon' }, [
+    el('span', { ariaHidden: 'true' }),
+    el('div', { className: 'nmain' }, [el('div', { className: 'ntop' }, [el('h3', { textContent: 'Anonymous session' }), el('span', { className: 'live num', title: 'A private window: nothing of it is listed, saved or kept' }, [el('i', { className: 'dot', ariaHidden: 'true' })])])]),
+  ])] : [];
+  $('activeRows').hidden = active.length + anon.length + own.length === 0;
+  $('activeNone').hidden = active.length + anon.length + own.length > 0;
+  $('activeRows').replaceChildren(...own, ...anon, ...active.map(namedLi));
+  $('namedRows').replaceChildren(...ownClosed, ...inactive.map(namedLi));
+  $('inactCount').textContent = inactive.length + ownClosed.length ? String(inactive.length + ownClosed.length) : '';
+  $('inactNone').hidden = inactive.length + ownClosed.length > 0 || !!namedQuery;
+  const nActive = active.length + anon.length + own.length;
+  $('activeCount').textContent = nActive ? String(nActive) : '';
+  // The card on top is the browser this page is in: a session by its name, or the owner's own.
+  const mainName = mainGamblium?.named ? mainGamblium.name : null;
+  $('now-title').firstChild.textContent = me ? `${me.name} ` : `${mainName || 'This Gamblium'} `;
+  $('now-title').querySelector('.kind').textContent = me ? `this session (#${me.id}), its own sign-ins` : mainName ? 'this Gamblium: every window you open normally' : 'your own, every window you open normally';
+  $('mainRename').hidden = !!me || !mainGamblium;
+  $('ownCard').hidden = filter !== 'all';
+  render();
+}
+
+/** The owner's own Gamblium as a row: its windows' tabs, read-only (commands do not go to it). */
+function mainRow(m) {
+  const wins = (Array.isArray(m.windows) ? m.windows : []).map((w) => {
+    const tabs = (w.tabs || []).filter((t) => /^https?:/i.test(t.url || ''));
+    return { tabs: tabs.length, icons: tabs.map((t) => ({ url: t.url, title: t.title || t.url, icon: t.icon })) };
+  }).filter((w) => w.tabs > 0);
+  const all = (Array.isArray(m.windows) ? m.windows : []).flatMap((w) => w.tabs || []).filter((t) => /^https?:/i.test(t.url || ''));
+  const name = m.named ? m.name : 'Your Gamblium';
+  const showing = namedShown === 'default';
+  // The same buttons as any other session (owner, Nov 16 2026: it had none).
+  const acts = [
+    button(m.state === 'running' ? 'Go to session' : 'Start in a window', () => send({ type: 'native', request: { type: 'start-main' } }).then(() => setTimeout(readNamed, 2500)), 'reopen'),
+    Object.assign(button('Fork', () => namedDo('fork', freeName(`${name}-child`), 'from=default', '--window'), 'quiet later'), { title: 'A child session: the same sign-ins, none of the tabs (asks in that window first)' }),
+    button('Rename', () => { renaming = 'default'; renderNamed(); $('activeRows')?.querySelector('.renameedit input')?.select(); }, 'quiet later'),
+    ...(all.length ? [button(showing ? 'Hide tabs' : 'Show tabs', () => { namedShown = showing ? null : 'default'; renderNamed(); }, 'quiet later')] : []),
+  ];
+  const list = showing ? el('ul', { className: 'ntabs' }, all.map((t) => el('li', {}, [icon({ url: t.url, title: t.title || t.url, icon: t.icon }), el('span', { className: 'ttitle', textContent: t.title || t.url }), el('span', { className: 'thost', textContent: t.url.replace(/^https?:\/\/(www\.)?/, '') })]))) : null;
+  return el('li', { className: 'nsess own' }, [
+    el('span', { ariaHidden: 'true' }),
+    el('div', { className: 'nmain' }, [
+      el('div', { className: 'ntop' }, [
+        renaming === 'default' ? renameEditor(name, 'default') : el('h3', { textContent: name }),
+        ...(m.state === 'running' ? [el('span', { className: 'live num', title: 'Running' }, [el('i', { className: 'dot', ariaHidden: 'true' }), m.pid ? String(m.pid) : ''])] : [el('span', { className: 'pill', textContent: 'Stopped' })]),
+        el('span', { className: 'kind', textContent: 'every window you open normally' }),
+      ]),
+      ...(wins.length ? [el('ul', { className: 'wins' }, wins.map((w) => windowRow(w, 22)))] : []),
+      ...(list ? [list] : []),
+    ]),
+    el('div', { className: 'sacts' }, acts),
+  ]);
+}
+
+function namedLi(s) {
+  {
     const v = namedView(s);
     const isBusy = busy === v.name;
     const asking = namedConfirm === v.name;
@@ -103,23 +178,80 @@ function renderNamed() {
     const proxyRow = editing === v.name ? proxyEditor(v) : el('p', { className: 'nfacts' }, [
       ...v.facts.map((f) => el('span', { textContent: f, title: / extensions?$/.test(f) && v.extensions.length ? v.extensions.join(', ') : '' })),
       Object.assign(button(v.proxy ? 'Change' : 'Set a proxy', () => { editing = v.name; renderNamed(); $('namedRows').querySelector('.proxyedit input')?.focus(); }, 'quiet later'), { disabled: isBusy }),
+      Object.assign(button('Fork', () => namedDo('fork', freeName(`${v.name}-child`), `from=${v.name}`, '--window'), 'quiet later'), { disabled: isBusy, title: 'A child session: the same sign-ins, none of the tabs' }),
+      Object.assign(button('Clone', () => namedDo('clone', v.name, freeName(`${v.name}-copy`), '--window'), 'quiet later'), { disabled: isBusy, title: 'The same sign-ins and tabs, as a session of its own' }),
+      Object.assign(button('Rename', () => { renaming = v.name; renderNamed(); $('namedRows').querySelector('.renameedit input')?.select(); }, 'quiet later'), { disabled: isBusy }),
     ]);
+    const web = (s.tabs || []).filter((t) => /^https?:/i.test(t.url || ''));
+    const strip = web.length ? el('ul', { className: 'wins', ariaLabel: `The tabs of ${v.name}` }, [windowRow({ tabs: web.length, icons: web.map((t) => ({ url: t.url, title: t.title || t.url, icon: t.icon })) }, 26)]) : null;
+    const showing = namedShown === v.name;
+    const list = showing && web.length ? el('ul', { className: 'ntabs' }, web.map((t) => el('li', {}, [icon({ url: t.url, title: t.title || t.url, icon: t.icon }), el('span', { className: 'ttitle', textContent: t.title || t.url }), el('span', { className: 'thost', textContent: t.url.replace(/^https?:\/\/(www\.)?/, '') })]))) : null;
+    const showBtn = web.length ? button(showing ? 'Hide tabs' : 'Show tabs', () => { namedShown = showing ? null : v.name; renderNamed(); }, 'quiet later') : null;
     const tick = el('input', { type: 'checkbox', className: 'npick', checked: picked.has(v.name), ariaLabel: `Select ${v.name}` });
     tick.addEventListener('change', () => { tick.checked ? picked.add(v.name) : picked.delete(v.name); pickedConfirm = false; renderNamed(); });
     const li = el('li', { className: 'nsess' }, [
       tick,
       el('div', { className: 'nmain' }, [
-        el('div', { className: 'ntop' }, [el('h3', { textContent: v.name }), el('span', { className: `pill ${v.cls}`.trim(), textContent: isBusy ? 'One moment…' : v.word })]),
+        el('div', { className: 'ntop' }, [
+          renaming === v.name ? renameEditor(v.name) : el('h3', { textContent: v.name }),
+          ...(s.id ? [idChip(s.id)] : []),
+          ...(s.pid ? [live(s.pid)] : []),
+          el('span', { className: 'kind', textContent: s.kind === 'child' ? `Child of ${s.parent || 'your Gamblium'}` : 'Main', title: s.clonedFrom ? `A clone of ${s.clonedFrom}` : '' }),
+          ...(s.named === false ? [el('span', { className: 'kind', textContent: 'unnamed', title: 'Made by the menu with a made-up name. Rename it to keep it.' })] : []),
+          el('span', { className: `pill ${v.cls}`.trim(), textContent: isBusy ? 'One moment…' : v.word }),
+        ]),
+        ...(strip ? [strip] : []),
+        ...(list ? [list] : []),
         proxyRow,
       ]),
-      el('div', { className: 'sacts' }, acts),
+      el('div', { className: 'sacts' }, [...acts, ...(showBtn && !asking ? [showBtn] : [])]),
     ]);
     li.dataset.state = v.state;
     if (isBusy) li.dataset.busy = '';
     if (asking) li.dataset.asking = '';
     if (picked.has(v.name)) li.dataset.picked = '';
     return li;
-  }));
+  }
+}
+
+// Running: a green dot and the browser's process id, small.
+function live(pid) {
+  return el('span', { className: 'live num', title: `Running, process ${pid}` }, [el('i', { className: 'dot', ariaHidden: 'true' }), String(pid)]);
+}
+
+// The session's id, small: a click copies it, for telling an agent which session (gamblium-cli #id ...).
+function idChip(id) {
+  const b = el('button', { type: 'button', className: 'idchip num', textContent: `#${id}`, title: 'This session\'s id: it never changes. Click to copy.' });
+  b.addEventListener('click', async () => {
+    await navigator.clipboard.writeText(`#${id}`).catch(() => {});
+    say($('namedSaid'), 'ok', `Copied #${id}. An agent can use it: gamblium-cli #${id} tabs`);
+  });
+  return b;
+}
+
+// A name not taken yet: base, base-2, base-3 ... (spaces and capitals do not count).
+function freeName(base) {
+  const taken = new Set(named.map((s) => nameKey(s.name)));
+  const has = (n) => taken.has(nameKey(n));
+  const b = base.slice(0, 36);
+  if (!has(b)) return b;
+  for (let i = 2; ; i += 1) if (!has(`${b}-${i}`)) return `${b}-${i}`;
+}
+
+let renaming = null;
+function renameEditor(name, as = name) {
+  const input = el('input', { type: 'text', value: name, spellcheck: false, ariaLabel: `New name for ${name}` });
+  const form = el('form', { className: 'renameedit' }, [input, el('button', { type: 'submit', textContent: 'Rename' }), button('Cancel', () => { renaming = null; renderNamed(); }, 'quiet')]);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const to = input.value.trim();
+    renaming = null;
+    if (!to || to === name) return renderNamed();
+    const bad = namedNameError(to, named.map((s) => s.name));
+    if (bad) { renderNamed(); return say($('namedSaid'), 'bad', bad); }
+    await namedDo('rename', as, to);
+  });
+  return form;
 }
 
 function renderPicked() {
@@ -173,7 +305,12 @@ async function namedDo(action, name, ...more) {
   renderNamed();
   const r = await namedCall(action, name, ...more);
   busy = null;
-  const done = { open: `"${name}" is open in a window.`, hide: `"${name}" is working with no window.`, close: `"${name}" is stopped. Its logins and tabs are kept.`, delete: `"${name}" and everything in it is deleted.`, set: `"${name}" uses ${r?.session?.applies?.proxy ?? 'no proxy'} from now on.`, create: `"${name}" is made.` }[action];
+  const done = {
+    focus: `"${name}" is in front.`,
+    fork: `"${name}" is open in its own window, signed in like ${String(more[0] || '').replace('from=', '')}.`,
+    clone: `"${more[0]}" is open: a copy of ${name} with its sign-ins and ${r?.tabs ?? 0} tabs.`,
+    rename: `"${name}" is now "${more[0]}".`,
+    open: `"${name}" is open in a window.`, hide: `"${name}" is working with no window.`, close: `"${name}" is stopped. Its logins and tabs are kept.`, delete: `"${name}" and everything in it is deleted.`, set: `"${name}" uses ${r?.session?.applies?.proxy ?? 'no proxy'} from now on.`, create: `"${name}" is made.` }[action];
   say($('namedSaid'), r?.ok === false ? 'bad' : 'ok', r?.ok === false ? r.error || 'That did not work.' : done);
   await readNamed();
 }
@@ -193,9 +330,20 @@ $('namedForm').addEventListener('submit', async (e) => {
   await namedDo('create', ...args);
 });
 
+// ---- Filter: All, Named, Unnamed, Saved tab sets ----------------------------------------
+let filter = 'all';
+for (const b of document.querySelectorAll('#sfilter [data-filter]')) {
+  b.addEventListener('click', () => {
+    filter = b.dataset.filter;
+    for (const x of document.querySelectorAll('#sfilter [data-filter]')) x.setAttribute('aria-pressed', String(x === b));
+    renderNamed();
+  });
+}
+
 // ---- Open now ----------------------------------------------------------------------
 
 let now = { shape: [], windows: 0, tabs: 0, skipped: 0 };
+let privateWindows = 0; // open private windows: shown as one "Anonymous session", nothing more
 let currentWindow = null;
 
 async function readNow() {
@@ -203,12 +351,36 @@ async function readNow() {
     now = DEMO_NOW();
     currentWindow = now.shape[0]?.id ?? null;
   } else {
-    const [tabs, groups, win] = await Promise.all([chrome.tabs.query({}), chrome.tabGroups ? chrome.tabGroups.query({}) : [], chrome.windows.getCurrent()]);
+    const [all, groups, win] = await Promise.all([chrome.tabs.query({}), chrome.tabGroups ? chrome.tabGroups.query({}) : [], chrome.windows.getCurrent()]);
     currentWindow = win.id;
+    const tabs = all.filter((t) => !t.incognito);
+    privateWindows = new Set(all.filter((t) => t.incognito).map((t) => t.windowId)).size;
     now = nowShape(tabs, groups, win.id);
+    renderNamed();
   }
   renderNow();
 }
+
+// Naming the owner's own Gamblium ("Personal"): the same name in every window's manager.
+$('mainRename').addEventListener('click', () => {
+  const h = $('now-title');
+  const input = el('input', { value: mainGamblium?.named ? mainGamblium.name : '', placeholder: 'A name, e.g. Personal', className: 'renameedit' });
+  const done = async (keep) => {
+    const v = input.value.trim();
+    input.remove();
+    h.hidden = false;
+    if (!keep || !v) return;
+    const r = await namedCall('rename', 'default', v);
+    if (r?.ok === false) say($('namedSaid'), 'bad', r.error);
+    await readNamed();
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); });
+  input.addEventListener('blur', () => done(true));
+  h.hidden = true;
+  h.after(input);
+  input.focus();
+  input.select();
+});
 
 function renderNow() {
   const mine = now.shape.filter((w) => scope === 'all' || w.id === currentWindow);
@@ -227,6 +399,37 @@ function renderNow() {
   }));
   for (const b of document.querySelectorAll('#saveForm [data-scope]')) b.setAttribute('aria-pressed', String(b.dataset.scope === scope));
   $('saveKeep').disabled = $('saveClose').disabled = tabs === 0;
+  matchNow(mine, parts);
+}
+
+// The open tabs may be a saved session come back (the browser reopens them after a restart, or
+// Reopen did): then that session's name is offered, and saving brings it up to date instead of
+// adding a second copy. A name typed by hand is never replaced.
+let nameTyped = false;
+let openMatch = null; // the saved set whose tabs are the ones open now
+let myPid = null;
+if (!demo) send({ type: 'native', request: { type: 'ping' } }).then((r) => { myPid = r?.browserPid ?? null; renderNamed(); }).catch(() => {});
+let nameOffered = null;
+$('name').addEventListener('input', () => { nameTyped = true; });
+async function matchNow(mine, parts) {
+  if (demo) return;
+  const urls = mine.flatMap((w) => w.icons.map((i) => i.url));
+  const r = urls.length ? await send({ type: 'session-match', urls }) : null;
+  const m = r && r.ok !== false ? r.match : null;
+  if ((m?.name ?? null) !== openMatch) {
+    openMatch = m?.name ?? null;
+    render();
+  }
+  if (m) {
+    $('nowLine').textContent = [...parts, `the tabs of "${m.name}": saving updates it`].join(' · ');
+    if (!nameTyped) {
+      $('name').value = m.name;
+      nameOffered = m.name;
+    }
+  } else if (nameOffered && !nameTyped) {
+    $('name').value = checkpointName();
+    nameOffered = null;
+  }
 }
 
 for (const b of document.querySelectorAll('#saveForm [data-scope]')) {
@@ -246,9 +449,48 @@ $('saveForm').addEventListener('submit', async (e) => {
   say($('said'), line.cls, line.text);
   if (r.ok !== false) {
     $('name').value = checkpointName();
+    nameTyped = false;
+    nameOffered = null;
     full.delete(r.name);
   }
   refresh();
+});
+
+// Fork: a new session, signed in where this one is, with none of its tabs (background.js sessionFork).
+const hereName = () => mySession()?.name || (mainGamblium?.named ? mainGamblium.name : 'Gamblium');
+$('forkNow').addEventListener('click', async () => {
+  const name = $('name').value.trim() || freeName(`${hereName()}-child`);
+  if (demo) return say($('said'), 'ok', `Forked "${name}" (made-up data: nothing was made).`);
+  $('forkNow').disabled = true;
+  say($('said'), 'ok', `Making "${name}"…`);
+  const r = await send({ type: 'session-fork', name });
+  $('forkNow').disabled = false;
+  if (r?.ok === false) return say($('said'), 'bad', r.error || 'The session could not be made.');
+  say($('said'), 'ok', `"${r.name}" is open in its own window, signed in like this one (${r.cookies} sign-in cookies).`);
+  refresh();
+});
+
+// Clone: a new main session with this browser's sign-ins and these same tabs.
+$('cloneNow').addEventListener('click', async () => {
+  const name = $('name').value.trim() || freeName(`${hereName()}-copy`);
+  if (demo) return say($('said'), 'ok', `Cloned "${name}" (made-up data: nothing was made).`);
+  $('cloneNow').disabled = true;
+  say($('said'), 'ok', `Making "${name}"…`);
+  const r = await send({ type: 'session-fork', name, kind: 'main' });
+  if (r?.ok === false) {
+    $('cloneNow').disabled = false;
+    return say($('said'), 'bad', r.error || 'The session could not be made.');
+  }
+  const tabs = (await chrome.tabs.query({})).filter((t) => !t.incognito);
+  const urls = tabs.map((t) => t.url).filter((u) => /^https?:/.test(u || ''));
+  let n = 0;
+  for (const u of urls) {
+    const o = await send({ type: 'native', request: { type: 'named-sessions', args: ['open-url', r.name, u] } });
+    if (o?.ok !== false) n += 1;
+  }
+  $('cloneNow').disabled = false;
+  say($('said'), 'ok', `"${r.name}" is open: your sign-ins and ${n} of these tabs, a main session of its own.`);
+  readNamed();
 });
 
 // ---- Saved sessions ------------------------------------------------------------------
@@ -265,16 +507,38 @@ async function readList() {
 }
 
 function render() {
-  const shown = found ? list.filter((s) => found.has(s.name)) : filterSessions(list, query);
-  $('none').hidden = list.length > 0;
-  $('nomatch').hidden = !(list.length > 0 && shown.length === 0);
-  $('sq').hidden = list.length === 0 && !query;
-  $('count').textContent = list.length ? String(list.length) : '';
+  const sets = filter === 'all' || filter === 'sets' ? list.filter((s) => s.name !== openMatch) : [];
+  const shown = found ? sets.filter((s) => found.has(s.name)) : filterSessions(sets, query);
+  const me = mySession();
+  const mirrored = me && (filter === 'all' || filter === 'sets') ? filterSessions(mainSets, query) : [];
+  $('none').hidden = shown.length + mirrored.length > 0 || !!(query || found);
+  $('nomatch').hidden = !((query || found) && shown.length + mirrored.length === 0);
+  $('sq').hidden = sets.length + (me ? mainSets.length : 0) === 0 && !query;
+  $('count').textContent = shown.length + mirrored.length ? String(shown.length + mirrored.length) : '';
+  $('mirrorRows').replaceChildren(...mirrored.map((s) => mirrorCard(s, me)));
   const tabsFound = found ? [...found.values()].reduce((n, f) => n + f.total, 0) : 0;
   $('foundLine').hidden = !(found && shown.length);
   $('foundLine').textContent = found ? (tabsFound ? `${plural(tabsFound, 'tab')} in ${plural(shown.length, 'set')}` : `${plural(shown.length, 'set')} by name`) : '';
   const t = Date.now();
   $('rows').replaceChildren(...shown.map((s) => card(s, t)));
+}
+
+/** A tab set saved in the owner's own Gamblium, seen from a session: its tabs open here. */
+function mirrorCard(s, me) {
+  const tabs = (s.windows || []).flatMap((w) => w.tabs || []).filter((t) => /^https?:/i.test(t.url || ''));
+  const open = button('Open here', async () => {
+    open.disabled = true;
+    const r = await namedCall('open-set', `#${s.id}`, `in=#${me.id}`);
+    open.disabled = false;
+    say($('namedSaid'), r?.ok === false ? 'bad' : 'ok', r?.ok === false ? (r.error || 'Could not open it') : `${s.name}: its tabs are open in ${me.name}.`);
+  }, 'reopen');
+  return el('li', { className: 'sess' }, [
+    el('div', { className: 'shead' }, [
+      el('div', {}, [el('h3', { textContent: s.name }), el('p', { className: 'swhen num', textContent: `${sessionWhen(s.savedAt)} · ${plural(s.tabCount ?? tabs.length, 'tab')} · saved in ${mainGamblium?.named ? mainGamblium.name : 'your Gamblium'}` })]),
+      el('div', { className: 'sacts' }, [open]),
+    ]),
+    el('ul', { className: 'wins' }, [windowRow({ tabs: tabs.length, icons: tabs.map((t) => ({ url: t.url, title: t.title || t.url })) }, 22)]),
+  ]);
 }
 
 function card(s, t) {
@@ -292,7 +556,12 @@ function card(s, t) {
           ` · ${plural(s.tabs, 'tab')} in ${plural(s.windows, 'window')}`,
         ]),
       ]),
-      el('div', { className: 'sacts' }, [button('Reopen', () => restore(s.name), 'reopen'), more]),
+      el('div', { className: 'sacts' }, [
+        openMatch === s.name
+          ? el('span', { className: 'live num', title: myPid ? `Open now, process ${myPid}` : 'Open now' }, [el('i', { className: 'dot', ariaHidden: 'true' }), myPid ? String(myPid) : 'open'])
+          : button('Reopen', () => restore(s.name), 'reopen'),
+        more,
+      ]),
     ]),
     el('ul', { className: 'wins', ariaLabel: `The windows of ${s.name}` }, (s.shape ?? []).map((w) => windowRow(w, 26, hit?.total ? new Set(hit.tabs.map((t) => urlKey(t.url))) : null))),
     ...(hit?.total ? [hits(hit)] : []),

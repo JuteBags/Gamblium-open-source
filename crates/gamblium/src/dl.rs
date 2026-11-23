@@ -173,7 +173,8 @@ pub fn agent_download_folder(user_data: &Path) -> Option<PathBuf> {
     let lower = user_data.to_string_lossy().to_ascii_lowercase().replace('/', "\\");
     let name = user_data.file_name()?.to_string_lossy().into_owned();
     let who = if lower.contains("\\gamblium\\sessions\\") {
-        name
+        // By the session's name (its folder is its id); characters a folder cannot have become _.
+        crate::sessions::display_name(user_data).map(|n| n.chars().map(|c| if c.is_control() || "<>:\"|?*/\\".contains(c) { '_' } else { c }).collect()).unwrap_or(name)
     } else if lower.trim_end_matches('\\').ends_with("agent-profile") {
         "agent".to_owned()
     } else {
@@ -273,6 +274,36 @@ pub fn list(profile: &str) -> Result<Value, String> {
         let name = entry.file_name().to_string_lossy().into_owned();
         let Some(id) = name.strip_suffix(".args.json").filter(|id| valid_id(id)) else { continue };
         let (asked, state) = (read(&entry.path()), read(&d.join(format!("{id}.json"))));
+        // Records of downloads that ended over 30 days ago go (they were kept for ever, and every
+        // list read them all). The downloaded files themselves are never touched.
+        // As the page sees it: a job whose program died (raw "running", no heartbeat) counts as
+        // stopped, so it expires too (review 3, A22).
+        let seen = describe(&asked, &state, now());
+        let ended = matches!(seen["state"].as_str().or(state["state"].as_str()), Some("done" | "error" | "stopped" | "cancelled" | "interrupted"))
+            || matches!(state["state"].as_str(), Some("done" | "error" | "stopped" | "cancelled"));
+        let last = state["updated"].as_u64().or(asked["started"].as_u64()).unwrap_or(0);
+        if ended && last > 0 && now().saturating_sub(last) > 30 * 86_400 {
+            // An unfinished job's own part files go with its record: without the record it can
+            // never be continued, and nothing else removes them (review 3, A22). Finished files
+            // are never touched.
+            // Never a part another record still uses (a newer job at the same path; review 9, G23).
+            let shared = |p: &str| {
+                fs::read_dir(&d).into_iter().flatten().flatten().any(|e| {
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    n.ends_with(".json") && !n.ends_with(".args.json") && n != format!("{id}.json") && read(&e.path())["path"].as_str() == Some(p)
+                })
+            };
+            if state["state"].as_str() != Some("done") {
+                if let Some(p) = state["path"].as_str().filter(|p| !p.is_empty() && !shared(p)) {
+                    let _ = fs::remove_file(format!("{p}.part"));
+                    let _ = fs::remove_file(format!("{p}.part.state"));
+                }
+            }
+            crate::vault::remove(&d, id);
+            let _ = fs::remove_file(entry.path());
+            let _ = fs::remove_file(d.join(format!("{id}.json")));
+            continue;
+        }
         // A stored login goes when its time is up or its download is finished.
         let expired = asked["cookieUntil"].as_u64().map(|u| now() >= u).unwrap_or(true);
         if expired || state["state"].as_str() == Some("done") {
@@ -384,16 +415,8 @@ pub fn cancel(id: &str) -> Result<Value, String> {
         return Ok(json!({ "id": id, "skipped": "not running" }));
     }
     let pid = state["pid"].as_u64().ok_or("the download has not said which program it is yet; try again in a second")?;
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // No console window flashes up.
-        let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/F"]).creation_flags(0x0800_0000).output();
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = std::process::Command::new("kill").arg(pid.to_string()).output();
-    }
+    // Directly, with no kill program started (procs::kill_tree).
+    crate::procs::kill_tree(pid as u32);
     let mut m = state.as_object().cloned().unwrap_or_default();
     // Stopping a torrent that was only sharing leaves a finished download.
     let finished = state["state"].as_str() == Some("seeding");
@@ -426,6 +449,19 @@ pub fn resume(id: &str) -> Result<Value, String> {
     } else {
         None
     };
+    // The path the first run chose (a free name such as "invoice (1).pdf" is recorded nowhere
+    // else): continued there, as this download's own part (review 4, B3).
+    let mut args = args;
+    if let Some(path) = state["path"].as_str().filter(|p| !p.is_empty()) {
+        if let Some(i) = args.iter().position(|a| a == "--out" || a == "-o") {
+            if i + 1 < args.len() {
+                args.drain(i..=i + 1);
+            }
+        }
+        args.push("--out".into());
+        args.push(path.to_owned());
+        args.push("--resume".into());
+    }
     spawn(id, &args, cookie.as_deref())?;
     Ok(json!({ "id": id, "resumed": true }))
 }

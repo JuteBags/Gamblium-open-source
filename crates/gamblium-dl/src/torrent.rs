@@ -194,8 +194,22 @@ fn from_web_seed(o: &Options, seed: &WebSeed) {
     if target.exists() {
         return;
     }
+    // An unfinished part of that name that is not this file's (another download paused under the
+    // same name): left alone, the peers fetch it (review 5, C8: it was taken over and deleted).
+    let mut part = target.as_os_str().to_owned();
+    part.push(".part");
+    let part = std::path::PathBuf::from(part);
+    if part.exists() {
+        let mut st = part.as_os_str().to_owned();
+        st.push(".state");
+        let ours = std::fs::read_to_string(std::path::PathBuf::from(st)).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()).is_some_and(|v| v["size"].as_u64() == Some(seed.size));
+        if !ours {
+            return;
+        }
+    }
     report(o, json!({ "event": "web-seed", "sources": seed.urls.len() }), || format!("{} web address(es) in the torrent: fetching from there first", seed.urls.len()));
     let web = Options {
+        resume: true, // the torrent's own file, continued
         urls: seed.urls.clone(),
         out: Some(target.clone()),
         dir: o.dir.clone(),

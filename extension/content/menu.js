@@ -84,7 +84,10 @@
     if (ctx.video) group('Video', '', [{ id: 'video-tab', label: 'Open in new tab', icon: 'tab' }, { id: 'video-copy', label: 'Copy video address', icon: 'link' }]);
     if (ctx.editable) {
       // The usual edit commands in their usual places; Cut and Copy stay, greyed, when nothing is selected.
-      group('Text field', '', [
+      // A password field first offers a strong password (owner, Nov 15 2026: the browser's own
+      // offer is missing).
+      group(ctx.password ? 'Password field' : 'Text field', '', [
+        ...(ctx.password ? [{ id: 'pw-suggest', label: 'Suggest a strong password', icon: 'key' }] : []),
         { id: 'undo', label: 'Undo', icon: 'undo', keys: 'Ctrl+Z' },
         { id: 'cut', label: 'Cut', icon: 'cut', keys: 'Ctrl+X', disabled: !ctx.text }, { id: 'copy', label: 'Copy', icon: 'copy', keys: 'Ctrl+C', disabled: !ctx.text },
         { id: 'paste', label: 'Paste', icon: 'paste', keys: 'Ctrl+V' }, { id: 'select-all', label: 'Select all', icon: 'select', keys: 'Ctrl+A' },
@@ -241,6 +244,7 @@
     focus: 'M2.500 5.500v-3h3M10.500 2.500h3v3M13.500 10.500v3h-3M5.500 13.500h-3v-3M8 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4z',
     tools: 'M9.500 3a3 3 0 0 0-2.700 4.300L3 11.100V13h1.900l3.800-3.800A3 3 0 0 0 13 6.500l-2 2-1.500-.500L9 6.500l2-2A3 3 0 0 0 9.500 3z',
     shield: 'M8 2.500 12.500 4v4c0 2.600-1.900 4.600-4.500 5.500C5.400 12.600 3.500 10.600 3.500 8V4z',
+    key: 'M10.500 3.500a2.500 2.500 0 1 1-1.900 4.100L4 12.200V13.500h1.500v-1h1v-1h1l1.100-1.100A2.500 2.500 0 0 1 10.500 3.500zM11 5.500h.010',
     grid: 'M3 3h4v5H3zM9 3h4v3H9zM9 8h4v5H9zM3 10h4v3H3z',
     more: 'M4 8h.010M8 8h.010M12 8h.010',
     camera: 'M2.500 5.500A1 1 0 0 1 3.500 4.500h1.700l1-1.500h3.600l1 1.500h1.700a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1zM8 11a2.200 2.200 0 1 0 0-4.400A2.200 2.200 0 0 0 8 11z',
@@ -255,7 +259,7 @@
     translate: 'M2.500 4h6M5.500 2.500V4M4 4c.300 2.300 1.900 4.200 4 5M7.500 4c-.400 2.500-2.200 4.600-5 5.500M8.500 13.500l2.500-6 2.500 6M9.300 11.500h3.400',
     box: 'M4 3.500h8a.500.500 0 0 1 .500.500v8a.500.500 0 0 1-.500.500H4a.500.500 0 0 1-.500-.500V4a.500.500 0 0 1 .500-.500z',
     boxcheck: 'M4 3.500h8a.500.500 0 0 1 .500.500v8a.500.500 0 0 1-.500.500H4a.500.500 0 0 1-.500-.500V4a.500.500 0 0 1 .500-.500zM5.500 8.200 7.300 10l3.200-3.800',
-    gear: 'M8 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM8 2.500v1.500M8 12v1.500M2.500 8H4M12 8h1.500M4.100 4.100l1.100 1.100M10.800 10.800l1.100 1.100M11.900 4.100l-1.100 1.100M5.200 10.800l-1.100 1.100',
+    gear: 'M6.86 3.24L7.02 1.47L8.98 1.47L9.14 3.24A4.9 4.9 0 0 1 10.56 3.82L11.93 2.69L13.31 4.07L12.18 5.44A4.9 4.9 0 0 1 12.76 6.86L14.53 7.02L14.53 8.98L12.76 9.14A4.9 4.9 0 0 1 12.18 10.56L13.31 11.93L11.93 13.31L10.56 12.18A4.9 4.9 0 0 1 9.14 12.76L8.98 14.53L7.02 14.53L6.86 12.76A4.9 4.9 0 0 1 5.44 12.18L4.07 13.31L2.69 11.93L3.82 10.56A4.9 4.9 0 0 1 3.24 9.14L1.47 8.98L1.47 7.02L3.24 6.86A4.9 4.9 0 0 1 3.82 5.44L2.69 4.07L4.07 2.69L5.44 3.82A4.9 4.9 0 0 1 6.86 3.24ZM10.10 8.00A2.1 2.1 0 1 1 5.90 8.00A2.1 2.1 0 1 1 10.10 8.00Z',
   };
   const CSS = `
     :host { all: initial; position: fixed; inset: 0; z-index: 2147483647; pointer-events: none; }
@@ -447,6 +451,67 @@
     if (e.key === 'Tab') return stop();
   }
 
+  // ---- A strong password, filled in, with a small card to see or copy it --------------------
+  // 20 characters from letters, digits and a few symbols sites accept, without the ones people
+  // misread (0 O 1 l I); at least one of each kind. Random from the browser's crypto source.
+  function strongPassword(n = 20) {
+    const sets = ['ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnopqrstuvwxyz', '23456789', '-_!@#$%*+=?'];
+    const all = sets.join('');
+    const pick = (s) => { const lim = 256 - (256 % s.length); for (;;) { const b = crypto.getRandomValues(new Uint8Array(1))[0]; if (b < lim) return s[b % s.length]; } };
+    for (;;) {
+      const p = Array.from({ length: n }, () => pick(all)).join('');
+      if (sets.every((s) => [...p].some((ch) => s.includes(ch)))) return p;
+    }
+  }
+  // As if typed: through the field's own value setter, so pages built with React and the like see it.
+  function setTyped(field, value) {
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    field.focus();
+    set.call(field, value);
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  function suggestPassword(field) {
+    if (!(field instanceof HTMLInputElement)) return;
+    const pw = strongPassword();
+    setTyped(field, pw);
+    // Its twin: the "confirm password" field of the same form, if it is empty or asks to repeat.
+    const scope = field.form || document;
+    const others = [...scope.querySelectorAll('input[type=password]')].filter((f) => f !== field && !f.disabled);
+    const twin = others.find((f) => !f.value || /confirm|repeat|again|verify|retype/i.test(`${f.name} ${f.id} ${f.placeholder} ${f.getAttribute('aria-label') || ''}`));
+    if (twin) setTyped(twin, pw);
+    field.focus();
+    passwordCard(field, pw, !!twin);
+  }
+  function passwordCard(field, pw, twin) {
+    document.getElementById('gamblium-pw-card')?.remove();
+    const host = document.createElement('div');
+    host.id = 'gamblium-pw-card';
+    const r = field.getBoundingClientRect();
+    // Beside the field when there is room, else above it: never over the form's next fields.
+    const W = 380, H = 120;
+    // Right of every field and button of the form, so none of them is hidden.
+    const parts = [...(field.form || document).querySelectorAll('input:not([type=hidden]), select, textarea, button')].map((e) => e.getBoundingClientRect()).filter((b) => b.width && b.bottom > r.top - 200 && b.top < r.bottom + 300);
+    const right = Math.max(r.right, ...parts.map((b) => b.right));
+    const pos = right + 16 + W < innerWidth ? { left: right + 16, top: Math.max(8, r.top - 8) } : { left: Math.max(8, Math.min(r.left, innerWidth - W - 8)), top: Math.max(8, Math.min(...parts.map((b) => b.top), r.top) - H - 8) };
+    Object.assign(host.style, { position: 'fixed', left: `${pos.left}px`, top: `${pos.top}px`, zIndex: 2147483647 });
+    const root = host.attachShadow({ mode: 'closed' });
+    root.innerHTML = `<style>
+      .c{font:13px/1.35 'Segoe UI',system-ui,sans-serif;background:#17181B;color:#E4E6EB;border:1px solid #2B2D33;border-radius:12px;padding:10px 12px;box-shadow:0 10px 30px rgba(0,0,0,.35);display:flex;flex-direction:column;gap:8px;min-width:280px;max-width:380px}
+      .t{display:flex;align-items:center;gap:8px;font-weight:600}.t i{width:8px;height:8px;border-radius:50%;background:#6CC48F;display:inline-block}
+      .p{font:13px 'Cascadia Mono',Consolas,monospace;background:#0D0E10;border:1px solid #2B2D33;border-radius:8px;padding:6px 8px;letter-spacing:.5px;word-break:break-all}
+      .r{display:flex;gap:6px;align-items:center}.s{color:#9DA1AA;font-size:12px;flex:1}
+      button{font:inherit;color:inherit;background:#232428;border:1px solid #2B2D33;border-radius:8px;padding:4px 10px;cursor:pointer}button:hover{border-color:#9DA1AA}
+      @media (prefers-color-scheme: light){.c{background:#fff;color:#121316;border-color:#CDD1D9}.p{background:#F7F8FA;border-color:#CDD1D9}button{background:#F2F3F5;border-color:#CDD1D9}.s{color:#555B66}}
+    </style><div class="c" role="status"><div class="t"><i></i>Strong password filled${twin ? ' in both fields' : ''}</div><div class="p" id="p">${'•'.repeat(pw.length)}</div><div class="r"><span class="s">Gamblium offers to save it when you send the form.</span><button id="show">Show</button><button id="copy">Copy</button><button id="x" aria-label="Close">✕</button></div></div>`;
+    let shown = false;
+    root.getElementById('show').onclick = () => { shown = !shown; root.getElementById('p').textContent = shown ? pw : '•'.repeat(pw.length); root.getElementById('show').textContent = shown ? 'Hide' : 'Show'; };
+    root.getElementById('copy').onclick = async () => { try { await navigator.clipboard.writeText(pw); root.getElementById('copy').textContent = 'Copied'; } catch { root.getElementById('copy').textContent = 'Not allowed'; } };
+    root.getElementById('x').onclick = () => host.remove();
+    document.documentElement.append(host);
+    setTimeout(() => host.remove(), 30000);
+  }
+
   async function copyText(text) {
     try {
       await navigator.clipboard.writeText(text);
@@ -527,6 +592,7 @@
       case 'copy': return c.editable ? (c.target?.focus?.(), document.execCommand('copy')) : copyText(c.text);
       case 'paste': return paste(c.target);
       case 'select-all': c.target?.focus?.(); return c.target?.select ? c.target.select() : document.execCommand('selectAll');
+      case 'pw-suggest': return suggestPassword(c.target);
       case 'search': return send('search', { text: c.text });
       case 'page-save': return send('save', { url: c.page, ask: true });
       case 'page-print': return setTimeout(() => print(), 60);
@@ -561,6 +627,7 @@
     const base = {
       link: a ? a.href : '', image: img ? img.currentSrc || img.src : '', imageSize: img && img.naturalWidth ? `${img.naturalWidth} × ${img.naturalHeight}` : '', video: vid ? vid.currentSrc || vid.src : '',
       text: text.trim() ? text : '', editable: !!typed, target: typed ? field : null, page: location.href,
+      password: !!(typed && field instanceof HTMLInputElement && (field.type === 'password' || /new-password|current-password/i.test(field.autocomplete || ''))),
       linkText: a ? short((a.textContent || '').trim().replace(/\s+/g, ' '), 36) : '',
       canBack: globalThis.navigation?.canGoBack, canForward: globalThis.navigation?.canGoForward, x: e.clientX, y: e.clientY,
     };

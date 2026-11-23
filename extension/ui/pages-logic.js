@@ -947,16 +947,21 @@ export function sessionTabs(session) {
 // The helper's row: { name, state: "stopped" | "hidden" | "window", by: "cli" | "page",
 // applies: { proxy, always, extensions: [names] } }. "cli" is the command line: an agent or a person.
 
-const NAMED_WORDS = ['create', 'list', 'open', 'hide', 'close', 'delete', 'set', 'help'];
+const NAMED_WORDS = ['create', 'new', 'list', 'ls', 'open', 'show', 'hide', 'close', 'stop', 'delete', 'set', 'help', 'version', 'open-url', 'fork', 'clone', 'rename', 'main', 'open-set', 'focus', 'default'];
+/** A name as people mean it: spaces at the ends dropped, runs of spaces made one. */
+export const tidyName = (raw) => String(raw ?? '').split(/\s+/).filter(Boolean).join(' ');
+/** Two names are one session when they differ only in spaces or capitals (sessions.rs name_key). */
+export const nameKey = (raw) => tidyName(raw).toLowerCase();
 
 /** Why a name cannot be used for a named session, or '' when it can. */
 export function namedNameError(raw, taken = []) {
-  const name = String(raw ?? '').trim();
+  const name = tidyName(raw);
   if (!name) return 'Give the session a name.';
-  if (name.length > 40) return 'A session name can be at most 40 characters.';
-  if (!/^[A-Za-z0-9_-]+$/.test(name)) return 'Use letters, digits, - and _ only (no spaces).';
+  if ([...name].length > 40) return 'A session name can be at most 40 characters.';
+  if (/[<>:"|?*/\\\u0000-\u001f]/.test(name)) return 'A session name cannot have < > : " | ? * / or \\ in it.';
+  if (/^[-#]/.test(name)) return 'A session name cannot start with - or #.';
   if (NAMED_WORDS.includes(name.toLowerCase())) return `"${name}" is a command word; pick another name.`;
-  if (taken.some((t) => String(t).toLowerCase() === name.toLowerCase())) return `There is already a session called "${name}".`;
+  if (taken.some((t) => nameKey(t) === nameKey(name))) return `There is already a session called "${name}" (spaces and capitals do not make a new name).`;
   return '';
 }
 
@@ -984,7 +989,8 @@ export function namedView(s) {
   const state = ['stopped', 'hidden', 'window'].includes(s?.state) ? s.state : 'stopped';
   const word = { stopped: 'Stopped', hidden: 'Working unseen', window: 'Open in a window' }[state];
   const cls = { stopped: '', hidden: 'warn', window: 'ok' }[state];
-  const actions = { stopped: ['open', 'hide', 'delete'], hidden: ['open', 'close'], window: ['hide', 'close'] }[state];
+  // A person's session (Work) never runs unseen: unseen is an agent's browser (review 4, B1).
+  const actions = { stopped: ['open', 'hide', 'delete'], hidden: ['open', 'close'], window: ['focus', 'hide', 'close'] }[state].filter((a) => !(s?.person && a === 'hide'));
   const proxy = s?.applies?.proxy || null;
   const facts = [proxy ? `Proxy ${proxy}` : 'No proxy'];
   const extensions = s?.applies?.extensions;
@@ -992,12 +998,16 @@ export function namedView(s) {
   if (s?.by === 'cli') facts.push('made from the command line');
   return { name: String(s?.name ?? ''), state, word, cls, actions, proxy, facts, extensions: Array.isArray(extensions) ? extensions : [] };
 }
-export const NAMED_ACTION_NAMES = { open: 'Open in a window', hide: 'Run unseen', close: 'Stop', delete: 'Delete' };
+export const NAMED_ACTION_NAMES = { focus: 'Go to session', open: 'Open in a window', hide: 'Run unseen', close: 'Stop', delete: 'Delete' };
 /** Sessions whose name holds every word typed (any order, any case). */
 export function filterNamed(list, query) {
   const words = String(query ?? '').toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return list;
-  return list.filter((s) => { const n = String(s?.name ?? '').toLowerCase(); return words.every((w) => n.includes(w)); });
+  // A session's name, or any of its tabs' addresses and titles.
+  return list.filter((s) => {
+    const hay = [s?.name, ...(Array.isArray(s?.tabs) ? s.tabs.flatMap((t) => [t?.url, t?.title]) : [])].map((x) => String(x ?? '').toLowerCase()).join('\n');
+    return words.every((w) => hay.includes(w));
+  });
 }
 /** Deleting a session deletes its logins on disk, so the question says so, in words. */
 export function namedDeleteQuestion(names) {
@@ -1016,13 +1026,14 @@ export function permitLabel(minutes) {
   return `Allow for ${hours} ${hours === 1 ? 'hour' : 'hours'}`;
 }
 /** One line saying what is in force. `view` is the helper's permit-get answer; `nowMs` the clock. */
-export function permitStatus(view, nowMs) {
-  if (view?.neverAsk) return 'Agents may change settings; you are not asked.';
+// `thing` says what the permission is for (review 8, F7: the person page said "settings").
+export function permitStatus(view, nowMs, thing = 'change settings') {
+  if (view?.neverAsk) return `Agents may ${thing}; you are not asked.`;
   if (view?.allowed && view.until) {
     const left = Math.max(1, Math.round((view.until * 1000 - nowMs) / 60000));
-    return left >= 60 ? `Agents may change settings for another ${Math.floor(left / 60)} h ${left % 60} min.` : `Agents may change settings for another ${left} min.`;
+    return left >= 60 ? `Agents may ${thing} for another ${Math.floor(left / 60)} h ${left % 60} min.` : `Agents may ${thing} for another ${left} min.`;
   }
-  return 'Agents may not change settings. They ask each time.';
+  return `Agents may not ${thing}. They ask each time.`;
 }
 
 /** A choice of the permission prompt in a word or two: "30 min", "1 hour", "Not now", "Always". */
@@ -1065,3 +1076,15 @@ export const zoomLabel = (z) => `${Math.round((Number(z) || 1) * 100)}%`;
 /** "1.0.0-beta.3" as people read it: "1.0.0 beta". The build number is for the updater only; the
  *  owner ships one "1.0.0 beta" (Nov 14 2026); its builds are not separate releases to people. */
 export const versionLabel = (v) => String(v || '').replace(/-beta(\.\d+)?$/, ' beta');
+
+// What "Sleep" in Tabs and memory reports (reply of the extension's "sleep-tabs").
+export function sleepSaid(r) {
+  const n = (k, word) => `${r[k]} ${word}${r[k] === 1 ? '' : 's'}`;
+  const parts = [];
+  if (r.slept) parts.push(`${n('slept', 'tab')} put to sleep`);
+  if (r.already) parts.push(r.slept ? `${r.already} already asleep` : r.already === 1 ? 'That tab was already asleep' : `${n('already', 'tab')} were already asleep`);
+  if (r.showing) parts.push(`${r.showing} on screen (a tab you're looking at stays awake)`);
+  if (r.gone) parts.push(`${r.gone} closed meanwhile`);
+  if (r.failed) parts.push(`${r.failed} the browser would not put to sleep`);
+  return parts.length ? parts.join('; ') + '.' : 'Nothing to put to sleep.';
+}

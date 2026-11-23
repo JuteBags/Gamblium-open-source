@@ -185,6 +185,53 @@ pub fn capture(pid: u32, want: Option<Want>) -> Result<(String, u32, u32, usize)
     Ok((id, w, h, png_bytes.len()))
 }
 
+/// Brings a running browser's window to the front, as it was (a minimised one is restored to
+/// its own size, a maximised one stays maximised). False if it has no window.
+#[cfg(windows)]
+pub fn bring_forward(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    struct Find {
+        pid: u32,
+        found: Vec<HWND>,
+    }
+    unsafe extern "system" fn top(h: HWND, l: LPARAM) -> BOOL {
+        let f = &mut *(l as *mut Find);
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(h, &mut pid);
+        let mut name = [0u16; 64];
+        let n = GetClassNameW(h, name.as_mut_ptr(), 64) as usize;
+        if pid == f.pid && IsWindowVisible(h) != 0 && GetWindow(h, GW_OWNER).is_null() && String::from_utf16_lossy(&name[..n]) == "Chrome_WidgetWin_1" {
+            f.found.push(h);
+        }
+        1
+    }
+    unsafe {
+        let mut f = Find { pid, found: Vec::new() };
+        EnumWindows(Some(top), &mut f as *mut Find as LPARAM);
+        // Windows lists windows front to back: the first is the one used last. A browser window,
+        // not picture-in-picture or the download card (always on top, tool windows, or small;
+        // review 1, #33): the first that looks like one, else the first at all.
+        let browser_like = |h: HWND| {
+            let ex = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+            let mut r: windows_sys::Win32::Foundation::RECT = std::mem::zeroed();
+            GetWindowRect(h, &mut r);
+            let (w, hgt) = (r.right - r.left, r.bottom - r.top);
+            ex & (WS_EX_TOPMOST | WS_EX_TOOLWINDOW) == 0 && (IsIconic(h) != 0 || (w >= 500 && hgt >= 350))
+        };
+        let Some(&h) = f.found.iter().find(|&&h| browser_like(h)).or(f.found.first()) else { return false };
+        if IsIconic(h) != 0 {
+            ShowWindow(h, SW_RESTORE);
+        }
+        SetForegroundWindow(h);
+        true
+    }
+}
+#[cfg(not(windows))]
+pub fn bring_forward(_pid: u32) -> bool {
+    false
+}
+
 #[cfg(not(windows))]
 pub fn capture(_pid: u32, _want: Option<Want>) -> Result<(String, u32, u32, usize), String> {
     Err("window pictures need Windows".into())

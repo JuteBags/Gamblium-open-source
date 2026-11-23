@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="bring.css">
 <script src="scheme.js"></script>
 <script src="../content/menu.js" defer></script>
+<style>.knobs{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 8px}.knobs .knob{width:38px;height:38px;border-radius:10px;border:1px solid var(--line,rgba(255,255,255,.12));background:rgba(127,127,127,.10);color:inherit;display:grid;place-items:center;cursor:pointer}.knobs .knob:hover{background:rgba(127,127,127,.2)}.knobs .knob[aria-pressed="true"]{background:#e9ebf0;color:#0d0e10;border-color:#e9ebf0}</style>
 </head>
 <body>
 <header class="bar">
@@ -18,10 +19,6 @@
   <span class="product">Gamblium</span>
   <nav aria-label="Gamblium pages">
     <a href="dashboard.html">Tabs and memory</a>
-    <span class="navhead">Library</span>
-    <a class="sub" href="history.html">History</a>
-    <a class="sub" href="downloads.html">Downloads</a>
-    <a class="sub" href="sessions.html">Sessions</a>
     <a href="security.html">Security</a>
     <a href="settings.html" aria-current="page">Settings</a>
   </nav>
@@ -210,6 +207,84 @@
         </div>
       </section>
 
+      <section class="panel" data-area="look" aria-labelledby="lyrics-title">
+        <header><h2 id="lyrics-title">Floating lyrics</h2></header>
+        <div class="fields" id="lyrFields">
+          <p class="hint" id="lyrState">An open lyrics card changes as you edit.</p>
+          <div class="field">
+            <label class="name" for="lyrPreset">Look</label>
+            <select id="lyrPreset"></select>
+            <p class="hint">A look sets every colour and effect below; your changes start from it.</p>
+          </div>
+          <div class="field">
+            <label class="name" for="lyrLayout">Shape</label>
+            <select id="lyrLayout"><option value="card">Mini player card (art, song, controls, lyrics)</option><option value="words">Lyrics only, no box</option><option value="strip">Lyrics in a box</option></select>
+            <p class="hint">Also on the lyrics themselves: the shape button while the mouse is over them, or right-click.</p>
+            <label class="check"><input type="checkbox" id="lyrSeekBar"> Seek bar under the words in "Lyrics only"</label>
+          </div>
+          <div class="field">
+            <span class="name">Seek bar knob</span>
+            <div class="knobs" id="lyrKnobs" role="group" aria-label="Seek bar knob"></div>
+            <div class="inline"><label class="swatch"><input type="color" id="lyrKnobColor"> Colour</label> <label for="lyrKnobSize">Size</label> <input type="range" id="lyrKnobSize" min="7" max="22" step="1"> <span id="lyrKnobSizeText"></span></div>
+            <div class="inline"><button type="button" id="lyrKnobUpload" class="quiet">Use your own picture…</button> <input type="file" id="lyrKnobFile" accept="image/png,image/jpeg,image/webp" hidden> <span class="hint" id="lyrKnobHint">PNG, JPEG or WebP, up to 1 MB. Shown while the mouse is over the bar.</span></div>
+          </div>
+          <div class="field">
+            <label class="name" for="lyrScript">Hindi songs</label>
+            <select id="lyrScript"><option value="hinglish">Hinglish (Tum hi ho)</option><option value="original">Original script</option><option value="both">Both</option></select>
+          </div>
+          <div class="field">
+            <label class="name" for="lyrLines">Lines</label>
+            <select id="lyrLines"><option value="1">The line being sung</option><option value="2">It and the next one</option><option value="3">The one before, it and the next</option></select>
+          </div>
+          <div class="field">
+            <label class="name" for="lyrFont">Font</label>
+            <div class="inline"><select id="lyrFont"></select> <input type="range" id="lyrSize" min="14" max="48" step="1" aria-label="Text size"> <span id="lyrSizeText"></span></div>
+          </div>
+          <div class="field">
+            <span class="name">Text</span>
+            <div class="swatches">
+              <label class="swatch"><input type="color" id="lyrColor"> Colour</label>
+              <label class="check"><input type="checkbox" id="lyrGradOn"> Fades to</label>
+              <label class="swatch"><input type="color" id="lyrGrad"> </label>
+              <label class="swatch"><input type="color" id="lyrTitle"> Song name and buttons</label>
+            </div>
+          </div>
+          <div class="field">
+            <label class="check"><input type="checkbox" id="lyrGlass"> Glass letters: see-through, with light on their edges</label>
+            <div class="inline"><label for="lyrGlassK">Strength</label> <input type="range" id="lyrGlassK" min="0" max="100" step="5"> <span id="lyrGlassText"></span></div>
+          </div>
+          <div class="field">
+            <span class="name">Glow</span>
+            <div class="inline"><label class="swatch"><input type="color" id="lyrGlow"> Colour</label> <input type="range" id="lyrGlowSize" min="0" max="24" step="1" aria-label="Glow size"> <span id="lyrGlowText"></span></div>
+          </div>
+          <div class="field">
+            <span class="name">Outline</span>
+            <div class="inline"><label class="swatch"><input type="color" id="lyrOutline"> Colour</label> <input type="range" id="lyrOutlineSize" min="0" max="6" step="1" aria-label="Outline width"> <span id="lyrOutlineText"></span></div>
+          </div>
+          <div class="field">
+            <label class="check"><input type="checkbox" id="lyrSparkle"> Sparkles round the line being sung</label>
+            <div class="inline"><label class="swatch"><input type="color" id="lyrSparkleColor"> Colour</label> <input type="range" id="lyrSparkleAmount" min="4" max="40" step="1" aria-label="How many sparkles"> <span id="lyrSparkleText"></span></div>
+          </div>
+          <div class="field">
+            <label class="check"><input type="checkbox" id="lyrShine"> Shine sweeping across the line</label>
+            <label class="swatch"><input type="color" id="lyrShineColor"> Colour</label>
+          </div>
+          <div class="field">
+            <span class="name">Card</span>
+            <div class="inline"><label class="swatch"><input type="color" id="lyrBg"> Background</label> <input type="range" id="lyrBgOpacity" min="0" max="100" step="5" aria-label="Background strength"> <span id="lyrBgText"></span></div>
+            <div class="inline"><label for="lyrArt">Song art behind it</label> <input type="range" id="lyrArt" min="0" max="100" step="5"> <span id="lyrArtText"></span></div>
+            <div class="inline"><label for="lyrMood">Tinted with the art's colour</label> <input type="range" id="lyrMood" min="0" max="100" step="5"> <span id="lyrMoodText"></span></div>
+            <div class="inline"><label for="lyrRound">Rounded corners</label> <input type="range" id="lyrRound" min="0" max="32" step="1"> <span id="lyrRoundText"></span></div>
+          </div>
+          <div class="field">
+            <label class="check"><input type="checkbox" id="lyrThrough"> Clicks pass through it to the app behind (Ctrl+Alt+L switches)</label>
+          </div>
+          <div class="field">
+            <button type="button" id="lyrReset" class="quiet">Back to the look's own settings</button>
+          </div>
+        </div>
+      </section>
+
       <section class="panel" data-area="browser" aria-labelledby="browser-title">
         <header><h2 id="browser-title">The browser's own settings</h2></header>
         <div class="fields">
@@ -226,7 +301,7 @@
           </div>
           <div class="field">
             <label class="check"><input type="checkbox" id="bangsOn"> !bangs in the address bar</label>
-            <p class="hint">"!w moon" or "moon !w" searches Wikipedia; !yt, !gh, !a (Amazon), !fk, !m (maps), !t (translate), !cl (Claude), !p (Perplexity) and about 40 more.</p>
+            <p class="hint">"!w moon" or "moon !w" searches Wikipedia; !yt, !gh, !img, !maps, !tr (translate), !a (Amazon), !fk, !hf (Hugging Face), !gmail (your first Google account; !gmail1, !gmail2 the next ones), !claude, !ppl, !gpt and about 30 more. Anything else goes to your search engine.</p>
             <label for="ownBangs" class="name">Your own, one per line: the bang, then the address with %s for the words</label>
             <textarea id="ownBangs" rows="3" spellcheck="false" placeholder="jira https://acme.atlassian.net/issues/?jql=text~%22%s%22"></textarea>
           </div>
@@ -235,7 +310,7 @@
 
       <section class="panel" data-area="bring" aria-labelledby="bring-title">
         <header><h2 id="bring-title">Bring your stuff over</h2></header>
-        <p class="lead">Where you are signed in with Chrome, Brave, Edge and Comet on this computer, to sign in again here. Read only; no password is read.</p>
+        <p class="lead">Your passwords, addresses and autofill, bookmarks and history from the other browsers on this computer, in one click, through the browser's own importer.</p>
         <div class="fields">
           <div class="field" id="bringBox"></div>
         </div>
@@ -317,6 +392,12 @@
             <p class="hint" id="permitOff" hidden>Switch command-line control on first.</p>
             <p class="hint">Without a permission, an agent waits for your answer.</p>
           </div>
+          <div class="field" id="personField" hidden>
+            <span class="name" id="person-label">Agents may work in your own session windows</span>
+            <div class="seg permitseg" id="personChoices" role="group" aria-labelledby="person-label"></div>
+            <p class="hint" id="personNow" role="status"></p>
+            <p class="hint">Your own windows (Work, and your own Gamblium) hold your sign-ins: an agent reads or acts on their pages only while this allows it.</p>
+          </div>
         </div>
       </section>
 
@@ -341,6 +422,14 @@
         <div class="fields">
           <dl class="kv" id="version"></dl>
           <label class="check" title="A new version is downloaded in the background and installed when you restart"><input type="checkbox" id="autoUpdate"> Check for updates when Gamblium starts</label>
+          <div class="field" id="startField">
+            <span class="name" id="start-label">When Gamblium starts</span>
+            <div class="seg" id="startChoices" role="group" aria-labelledby="start-label">
+              <button type="button" data-start="fresh" aria-pressed="false">No session</button>
+              <button type="button" data-start="last" aria-pressed="false">Last session</button>
+            </div>
+            <p class="hint" id="startHint"></p>
+          </div>
         </div>
       </section>
 

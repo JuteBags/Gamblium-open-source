@@ -168,7 +168,7 @@ async function run(mode) {
     for (const dir of [prof, shots]) {
       for (let i = 0; i < 5; i++) {
         try {
-          fs.rmSync(dir, { recursive: true, force: true });
+          fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
           break;
         } catch {
           await sleep(700);

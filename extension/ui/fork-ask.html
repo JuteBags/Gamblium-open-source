@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark light">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fork your sign-ins? · Gamblium</title>
+<link rel="icon" href="icons/icon-32.png">
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="app.css">
+<script src="scheme.js"></script>
+</head>
+<body class="permitpage">
+<main class="permit" aria-labelledby="fork-title">
+  <div class="phead">
+    <img class="pmark" src="icons/icon-128.png" alt="" width="40" height="40">
+    <div>
+      <h1 id="fork-title">Fork your sign-ins?</h1>
+      <p id="why">The command line asks for a new session with the sign-ins of this browser and none of its tabs.</p>
+    </div>
+  </div>
+  <ul class="pasks" id="asks" aria-label="What was asked"></ul>
+  <p id="now" class="pnow" role="status"></p>
+  <div class="pchoose" id="choose">
+    <button type="button" class="primary" id="no">Not now</button>
+    <button type="button" class="danger" id="yes">Allow this fork</button>
+  </div>
+  <p class="hint pfoot">Whoever drives that session can use the sites you are signed in to. Delete it on the <a href="sessions.html">Sessions</a> page.</p>
+</main>
+<script type="module" src="fork-ask.js"></script>
+</body>
+</html>

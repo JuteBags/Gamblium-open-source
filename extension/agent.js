@@ -15,7 +15,7 @@ export const OPS = {
   tabs: ["tabs", "[q=<text>]", "every tab (or those whose title or address contains q); state is awake, frozen or asleep"],
   open: ["tabs", "url=<address> [background=true] [wait=true] [window=<id>]", "open a tab"],
   close: ["tabs", "tab=<id> | tabs=<id,id,...>", "close tabs"],
-  activate: ["tabs", "tab=<id>", "show a tab and bring its window forward"],
+  activate: ["tabs", "tab=<id> [show=true]", "wake a tab; in a person's window it is shown to them (and the window raised) only with show=true"],
   navigate: ["tabs", "[tab=<id>] url=<address> [wait=true]", "go to an address in a tab"],
   reload: ["tabs", "[tab=<id>] [wait=true]", "reload; also wakes a sleeping tab"],
   "full-reload": ["tabs", "[tab=<id>]", "load the page again as a person would get it: pictures on, left running until the next command (an agent's page is bare and stopped by default)"],
@@ -36,11 +36,12 @@ export const OPS = {
   windows: ["windows", "", "every window with position, size and state"],
   "window-open": ["windows", "[url=<address>] [left= top= width= height=]", "open a window"],
   "window-close": ["windows", "window=<id>", "close a window"],
-  "window-focus": ["windows", "window=<id>", "bring a window forward"],
-  "window-set": ["windows", "window=<id> [left= top= width= height=] [state=normal|maximized|minimized|fullscreen]", "move, resize or change state"],
+  "window-focus": ["windows", "window=<id> [show=true]", "bring a window forward (a person's window: only with show=true)"],
+  "window-set": ["windows", "window=<id> [left= top= width= height=] [state=normal|maximized|minimized|fullscreen] [show=true]", "move, resize or change state (a person's window: only with show=true)"],
 
   page: ["read", "[tab=<id>]", "address, title, load state, scroll position, counts of links and forms"],
   text: ["read", "[tab=<id>] [selector=<css>] [max=<chars>]", "visible text of the page or of one element"],
+  fetch: ["read", "url=<address> [max=<chars>]", "the body of an address as text, fetched with this session's sign-ins; no tab, no download (a CSV export, JSON)"],
   html: ["read", "[tab=<id>] [selector=<css>] [max=<chars>]", "HTML of the page or of one element"],
   links: ["read", "[tab=<id>] [max=<count>]", "links on the page"],
   elements: ["read", "[tab=<id>] selector=<css> [max=<count>]", "matching elements with text, attributes and a selector for each"],
@@ -53,7 +54,8 @@ export const OPS = {
   click: ["act", "[tab=<id>] selector=<css> | text=<visible text> | x=<px> y=<px> [real=true]", "click an element or a point of the page"],
   mouse: ["act", "[tab=<id>] x=<px> y=<px> [action=click|double|right|move|down|up]", "real mouse input at a point of the page (agent profile)"],
   type: ["act", "[tab=<id>] selector=<css> text=<what to type> [submit=true] [real=true]", "fill a field"],
-  press: ["act", "[tab=<id>] key=<Enter|Tab|Escape|ArrowDown|a...> [selector=<css>] [real=true]", "send a key to an element or the focused one"],
+  press: ["act", "[tab=<id>] key=<Enter|Tab|Escape|ArrowDown|a...|Control+v|Shift+Tab...> [selector=<css>] [real=true]", "send a key or a chord to an element or the focused one (chords such as Control+v need real=true to reach canvas apps)"],
+  paste: ["act", "[tab=<id>] text=<what to paste> [selector=<css>]", "paste text into the focused field or the selected cell, as Ctrl+V would (Sheets and Docs take a whole tab-separated block)"],
   login: ["act", "[tab=<id>] [username=<which one>] [submit=false]", "sign in on this https page with the owner's saved login for its site; the agent never sees it (the owner allows it once, and adds logins in Settings > Agents)"],
   select: ["act", "[tab=<id>] selector=<css> value=<option value or label>", "choose an option in a select"],
   check: ["act", "[tab=<id>] selector=<css> [on=false]", "tick or untick a checkbox or radio"],
@@ -62,6 +64,7 @@ export const OPS = {
   submit: ["act", "[tab=<id>] selector=<css>", "submit the form the element belongs to"],
   scroll: ["act", "[tab=<id>] y=<pixels> | by=<pixels> | selector=<css> | to=bottom|top", "scroll the page"],
   wait: ["act", "[tab=<id>] selector=<css> | text=<text> [gone=true] [ms=<timeout>]", "wait until something appears (or is gone)"],
+  run: ["act", "file=<steps.json>|file=- [tab=<id>]", "several commands in one call, in order: a JSON list of steps such as {\"op\":\"click\",\"text\":\"Format\",\"real\":true}, {\"op\":\"wait\",\"text\":\"Wrapping\"}, {\"op\":\"pause\",\"ms\":300}; every step is checked first, it stops at the first that fails and says which, with the page's text"],
   "wait-load": ["act", "[tab=<id>] [ms=<timeout>]", "wait until the tab has finished loading"],
   eval: ["act", "[tab=<id>] code=<javascript> [real=true]", "run code in the page and return its value; in the agent profile it also works on sites that forbid eval and waits for promises"],
 
@@ -104,6 +107,7 @@ export const OPS = {
   "session-delete": ["sessions", "name=<name>", "delete a checkpoint"],
   "session-export": ["sessions", "name=<name> [out=<file.json>]", "the checkpoint as JSON"],
   "session-import": ["sessions", "file=<file.json>", "add a checkpoint from a file"],
+  fork: ["sessions", "name=<name> [hidden=false]", "a new named session with this browser's sign-ins and none of its tabs"],
 
   cookies: ["cookies", "url=<address> | domain=<domain>", "cookies for a site (agent profile only)"],
   "cookie-set": ["cookies", "url=<address> name=<name> value=<value> [path= secure=true httpOnly=true]", "set a cookie (agent profile only)"],
@@ -422,17 +426,81 @@ const KEY_CODES = {
   Home: 36, End: 35, PageUp: 33, PageDown: 34, Space: 32,
 };
 
-// What to send for one key: a named key ("Enter") or one character ("a").
+// Modifier names an agent may put before a key: "Control+v", "ctrl+shift+z", "Alt+Tab".
+const MODIFIERS = { alt: 1, control: 2, ctrl: 2, meta: 4, cmd: 4, command: 4, win: 4, shift: 8 };
+// Editing commands the browser runs for a chord. Not copy, cut or paste: those use the person's
+// own clipboard (an agent's paste would put whatever they copied into the page). paste text= does it.
+const CHORD_COMMANDS = { "2:a": "selectAll", "2:z": "undo", "2:y": "redo", "10:z": "redo" };
+
+// What to send for one key: a named key ("Enter"), one character ("a"), or either after
+// modifiers ("Control+v", "Shift+Tab"). `modifiers` is the browser's bit mask.
 export function keyEvent(raw) {
+  const parts = String(raw).split("+");
+  if (parts.length > 1 && parts[parts.length - 1] === "") parts.splice(-2, 2, "+"); // "Control++"
+  let modifiers = 0;
+  for (const m of parts.slice(0, -1)) {
+    const bit = MODIFIERS[m.trim().toLowerCase()];
+    if (!bit) return { ok: false, error: "unknown modifier '" + m + "' in '" + raw + "'. Use Control, Shift, Alt or Meta, e.g. Control+v" };
+    modifiers |= bit;
+  }
+  const one = parts[parts.length - 1];
+  // Never the person's clipboard: the page engine maps these to copy, cut and paste for trusted
+  // key events whatever command is sent. paste text= puts text in without it.
+  const k1 = one.toLowerCase();
+  if (((modifiers & 6) && ["c", "x", "v", "insert"].includes(k1)) || ((modifiers & 8) && ["delete", "insert"].includes(k1))) {
+    return { ok: false, error: "'" + raw + "' would use the person's own clipboard: use paste text=<text> to put text in" };
+  }
+  const k = plainKey(parts.length > 1 && one.length === 1 && /^[A-Z]$/.test(one) ? one.toLowerCase() : one, raw);
+  if (!k.ok || !modifiers) return k;
+  const ev = { ...k.event, modifiers };
+  // With Control, Alt or Meta held a letter types nothing; the browser's command does the work.
+  if (modifiers & 7) {
+    delete ev.text;
+    const cmd = CHORD_COMMANDS[`${modifiers}:${ev.key.toLowerCase()}`];
+    if (cmd) ev.commands = [cmd];
+  } else if (ev.text && /^[a-z]$/.test(ev.key)) {
+    ev.key = ev.key.toUpperCase();
+    ev.text = ev.key;
+  }
+  return { ok: true, event: ev, chord: true };
+}
+function plainKey(raw, asked = raw) {
   const key = raw === " " ? "Space" : String(raw);
   if (KEY_CODES[key]) {
     const text = key === "Enter" ? "\r" : key === "Space" ? " " : key === "Tab" ? "\t" : undefined;
     return { ok: true, event: { key: key === "Space" ? " " : key, code: key, windowsVirtualKeyCode: KEY_CODES[key], ...(text ? { text } : {}) } };
   }
-  if ([...key].length !== 1) return { ok: false, error: "unknown key '" + raw + "'. Use one character or: " + Object.keys(KEY_CODES).join(", ") };
+  if ([...key].length !== 1) return { ok: false, error: "unknown key '" + asked + "'. Use one character, a named key (" + Object.keys(KEY_CODES).join(", ") + "), or either after modifiers: Control+v, Shift+Tab, Control+Shift+z" };
   const upper = key.toUpperCase();
   const code = /^[a-z]$/i.test(key) ? "Key" + upper : /^[0-9]$/.test(key) ? "Digit" + key : "";
   return { ok: true, event: { key, code, windowsVirtualKeyCode: /^[a-z0-9]$/i.test(key) ? upper.charCodeAt(0) : 0, text: key } };
+}
+
+// Runs in the page: a paste of `text` on the focused element, as the browser sends one.
+function pagePaste(text) {
+  const el = document.activeElement || document.body;
+  const dt = new DataTransfer();
+  dt.setData("text/plain", text);
+  const ev = new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true });
+  const handled = !el.dispatchEvent(ev);
+  // A plain field no script handles: the text goes in where the cursor is.
+  if (!handled && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) {
+    const a = el.selectionStart ?? el.value.length, b = el.selectionEnd ?? el.value.length;
+    el.setRangeText(text, a, b, "end");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  } else if (!handled && el.isContentEditable) {
+    document.execCommand("insertText", false, text);
+  }
+  return { ok: true, pasted: text.length, into: el.tagName.toLowerCase() + (el.id ? "#" + el.id : el.className && typeof el.className === "string" ? "." + el.className.split(/\s+/)[0] : ""), handledByPage: handled };
+}
+
+// The width of a PNG given as base64 (its header), or null.
+function pngWidth(b64) {
+  try {
+    const head = atob(String(b64).slice(0, 44));
+    if (head.slice(1, 4) !== "PNG") return null;
+    return ((head.charCodeAt(16) << 24) | (head.charCodeAt(17) << 16) | (head.charCodeAt(18) << 8) | head.charCodeAt(19)) >>> 0;
+  } catch { return null; }
 }
 
 async function withDebugger(tabId, fn) {
@@ -466,6 +534,8 @@ const LENT = { width: 1280, height: 800 };
 // A whole-page picture: slices of this height, and never taller than FULL_MAX in all.
 const FULL_SLICE = 8000;
 const FULL_MAX = 100000;
+// A wide picture: the page laid out at most this wide.
+const WIDE_MAX = 8000;
 async function lendViewport(send) {
   const m = await send("Page.getLayoutMetrics");
   const v = m.cssLayoutViewport || m.layoutViewport;
@@ -518,8 +588,8 @@ function realKey(tabId, key) {
   if (!k.ok) return Promise.resolve(k);
   return withDebugger(tabId, async (send) => {
     await send("Input.dispatchKeyEvent", { type: k.event.text ? "keyDown" : "rawKeyDown", ...k.event });
-    await send("Input.dispatchKeyEvent", { type: "keyUp", ...k.event, text: undefined });
-    return { ok: true, real: true, pressed: k.event.key };
+    await send("Input.dispatchKeyEvent", { type: "keyUp", ...k.event, text: undefined, commands: undefined });
+    return { ok: true, real: true, pressed: String(key) };
   });
 }
 
@@ -660,7 +730,11 @@ function realScreenshot(tabId, o) {
     }
     if (o.delay) await sleepMs(o.delay);
     const keepScroll = o.scrollY !== undefined || o.scrollX !== undefined;
-    const base = { ok: true, real: true, tab: tabId, ...shotParams(o), viewport: `${v.vw}x${v.vh}`, ...(lent ? { lent } : {}) };
+    // Picture pixels are the page's own (CSS) pixels times scale, whatever the screen's scaling:
+    // x and y read off a picture taken at scale 1 are what click x= y= wants (an agent had to
+    // divide by 1.25 by hand, Nov 16 2026).
+    const dpr = await evalIn("devicePixelRatio").catch(() => 1);
+    const base = { ok: true, real: true, tab: tabId, ...shotParams(o), viewport: `${v.vw}x${v.vh}`, screenScale: dpr, ...(lent ? { lent } : {}) };
 
     // A box that scrolls on its own: its content, step by step, joined by the program (out=).
     if (o.scroller) {
@@ -699,7 +773,7 @@ function realScreenshot(tabId, o) {
 
     // The region of the page wanted, in page coordinates; null: what is visible.
     let region = null;
-    if (o.full) region = { x: 0, y: 0, width: v.vw, height: Math.min(v.pageHeight, FULL_MAX) };
+    if (o.full) region = { x: 0, y: 0, width: Math.min(Math.max(v.vw, v.pageWidth), WIDE_MAX), height: Math.min(v.pageHeight, FULL_MAX) };
     else if (o.area) region = { ...o.area };
     else if (o.selector) {
       const r = await evalIn(`(() => { const el = document.querySelector(${JSON.stringify(o.selector)}); if (!el) return null; const b = el.getBoundingClientRect(); return { x: b.left + scrollX, y: b.top + scrollY, width: b.width, height: b.height }; })()`);
@@ -707,15 +781,26 @@ function realScreenshot(tabId, o) {
       if (r.width < 1 || r.height < 1) return { ok: false, error: "that element takes no room on the page (hidden?)" };
       region = { x: Math.floor(r.x), y: Math.floor(r.y), width: Math.ceil(r.width), height: Math.ceil(r.height) };
     }
+    // At most about 64 million pixels laid out at once (8000 x 16000 was 512 MB in the page and
+    // graphics processes): a wide picture is cut to fit, whatever asked for it (review 2, 3.8).
+    if (region && region.width > v.vw) region.width = Math.max(v.vw, Math.min(region.width, Math.floor(64e6 / Math.min(Math.max(region.height, 1), FULL_SLICE * 2))));
     if (!region) {
       const [sx, sy] = await evalIn("[scrollX, scrollY]");
-      const shot = await picture(o.scale !== 1 ? { x: sx, y: sy, width: v.vw, height: v.vh } : null);
-      return { ...base, dataUrl: url(o.format, shot.data), ...out(v.vw, v.vh), region: { x: sx, y: sy, width: v.vw, height: v.vh } };
+      const shot = await picture({ x: sx, y: sy, width: v.vw, height: v.vh });
+      // Measured, not assumed: picture pixels per page pixel (the screen's scaling counts in).
+      const w = pngWidth(shot.data);
+      const ratio = w ? Math.round((w / v.vw) * 1000) / 1000 : null;
+      return { ...base, ...(ratio ? { pixelsPerCss: ratio, cssPixels: ratio === 1 } : {}), dataUrl: url(o.format, shot.data), ...(w ? { width: w, height: Math.round(v.vh * ratio) } : out(v.vw, v.vh)), region: { x: sx, y: sy, width: v.vw, height: v.vh }, ...(ratio && ratio !== 1 ? { hint: `divide picture x and y by ${ratio} for click x= y=` } : {}) };
     }
     region.width = Math.min(region.width, Math.max(1, v.pageWidth - region.x));
     region.height = Math.min(region.height, Math.max(1, v.pageHeight - region.y));
     if (region.x >= v.pageWidth || region.y >= v.pageHeight) return { ok: false, error: `the page is ${v.pageWidth} x ${v.pageHeight}: that area lies outside it` };
-    // Wider than the page is laid out: what lies beyond its width is not there to take.
+    // Wider than the window (owner, Nov 16 2026: wide pictures as well as long ones): the page is
+    // laid out that wide first, so what lies to the right is drawn (a sheet draws more columns).
+    if (region.x + region.width > v.vw) {
+      await setViewport(Math.min(region.x + region.width, WIDE_MAX), v.vh);
+      v = await view();
+    }
     const width = Math.min(region.width, Math.max(1, v.vw - region.x));
 
     // A picture's clip is measured from the top left of the page. The browser draws only what
@@ -802,9 +887,9 @@ const ids = (v) => list(v).map(Number).filter(Number.isInteger);
 const errText = (e) => String(e && e.message ? e.message : e);
 
 const tabRow = (t) => ({
-  id: t.id, window: t.windowId, index: t.index, title: t.title || "", url: t.pendingUrl || t.url || "",
+  id: t.id, window: t.windowId, index: t.index, title: t.title || "", url: t.pendingUrl || t.url || "", icon: /^https:/.test(t.favIconUrl || "") ? t.favIconUrl : "",
   active: !!t.active, pinned: !!t.pinned, audible: !!t.audible, muted: !!(t.mutedInfo && t.mutedInfo.muted),
-  group: t.groupId === undefined || t.groupId === -1 ? null : t.groupId, state: t.discarded ? "asleep" : "awake", loading: t.status === "loading",
+  group: t.groupId === undefined || t.groupId === -1 ? null : t.groupId, state: t.discarded ? "asleep" : "awake", loading: t.status === "loading", private: !!t.incognito,
 });
 
 const windowRow = (w) => ({
@@ -972,7 +1057,7 @@ function pageLogin(user, pass, submit) {
   return { ok: true, step: pw ? "password" : "username" };
 }
 
-async function inPage(tab, func, args, world) {
+async function inPage(tab, func, args, world, again = false) {
   tab = await wake(tab);
   const run = chrome.scripting.executeScript({ target: { tabId: tab.id }, func, args, ...(world ? { world } : {}) });
   const timeout = new Promise((r) => setTimeout(() => r("timeout"), 10000));
@@ -981,6 +1066,17 @@ async function inPage(tab, func, args, world) {
     result = await Promise.race([run, timeout]);
   } catch (e) {
     const msg = errText(e);
+    // A tab caught while waking or loading (tester, Nov 15 2026: an https page answered "cannot
+    // be scripted" after 96 s): look at the tab as it is now, let it finish, and try once more.
+    if (/permission|Cannot access/i.test(msg) && !again) {
+      const now = await chrome.tabs.get(tab.id).catch(() => null);
+      const url = now ? now.pendingUrl || now.url || "" : "";
+      if (now && (/^https?:/i.test(url) || !url || url === "about:blank" || now.status === "loading")) {
+        const loaded = await waitLoaded(tab.id, 15000).catch(() => now);
+        return inPage(loaded || now, func, args, world, true);
+      }
+      if (now) tab = now;
+    }
     if (/permission|Cannot access/i.test(msg) && !/^https?:/i.test(tab.url || tab.pendingUrl || "")) {
       // No extension may script these, in any profile (tester, Nov 14 2026: the advice below was wrong for them).
       return { ok: false, error: "this kind of page (data:, chrome:, file:, the Web Store, other extensions) cannot be scripted by an extension; open its content from an http(s) address. (" + msg + ")" };
@@ -1067,6 +1163,10 @@ export function wallHint(wall, noWindow) {
   return WALL_HINT;
 }
 
+// The agent profile's own copy of the extension (it may read every page). The normal copy has the
+// cookies permission too (for downloads behind a login), so that is no test (review 2, 3.1).
+const agentProfileOnly = () => (chrome.runtime.getManifest().host_permissions || []).includes("<all_urls>");
+
 export function makeCtl(deps) {
   const idMaps = async () => (deps.idMaps ? deps.idMaps() : null);
   if (deps.idMaps) idNow = async (id) => followId(await deps.idMaps(), id);
@@ -1103,13 +1203,69 @@ export function makeCtl(deps) {
       }
       return { ok: true, tabs };
     },
+    // The body of an address, fetched with this session's sign-ins, with no tab and no download
+    // (a CSV export, an API's JSON, a sheet as text). Text only, at most max characters.
+    fetch: async (c) => {
+      need(c, "url");
+      const addr = openableUrl(c.url);
+      if (!addr.ok || addr.url === "about:blank") return { ok: false, error: addr.error || "fetch needs a web address" };
+      const max = Math.min(Math.max(1000, Number(c.max) || 200000), 2000000);
+      try {
+        const r = await fetch(addr.url, { credentials: "include", redirect: "follow" });
+        const type = r.headers.get("content-type") || "";
+        if (!/^(text\/|application\/(json|xml|javascript|csv|x-www-form-urlencoded)|[^;]*\+(json|xml))/i.test(type) && type) {
+          return { ok: false, status: r.status, contentType: type, error: "not text (" + type + "): open it, or download it" };
+        }
+        // Read only up to max (a large body read whole could take the worker down).
+        const reader = r.body ? r.body.getReader() : null;
+        const dec = new TextDecoder();
+        let body = "";
+        let truncated = false;
+        if (reader) {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            body += dec.decode(value, { stream: true });
+            if (body.length >= max) { truncated = true; reader.cancel().catch(() => {}); break; }
+          }
+          body += dec.decode();
+        }
+        if (!type && /[\x00-\x08\x0e-\x1f]/.test(body.slice(0, 1024))) return { ok: false, status: r.status, error: "not text (no content type, binary): open it, or download it" };
+        return { ok: r.ok, status: r.status, url: r.url, contentType: type, length: Math.min(body.length, max), truncated, text: body.slice(0, max) };
+      } catch (e) {
+        return { ok: false, error: "could not fetch it: " + errText(e) };
+      }
+    },
+    // Text pasted into the focused field or the selected cell, as a person's Ctrl+V would bring
+    // it (Sheets and Docs take a whole tab-separated block). selector= focuses a field first.
+    paste: async (c) => {
+      need(c, "text");
+      const t = await resolveTab(c.tab);
+      if (c.selector) {
+        const focused = await inPage(t, pageAct, ["focus", c.selector, null]);
+        if (!focused || focused.ok === false) return focused;
+      }
+      return inPage(t, pagePaste, [String(c.text)]);
+    },
     open: async (c) => {
       need(c, "url");
       const addr = openableUrl(c.url);
       if (!addr.ok) return addr;
       c = { ...c, url: addr.url };
       let t = await chrome.tabs.create({ url: c.url, active: !c.background, ...(typeof c.window === "number" ? { windowId: c.window } : {}) });
-      if (c.wait) t = await waitLoaded(t.id);
+      const id = t.id;
+      // An address that is a file (a CSV export) becomes a download and its tab goes away: say so,
+      // not a tab id that answers nothing (Nov 16 2026). `fetch url=` reads such a body as text.
+      const gone = { ok: false, becameDownload: true, error: "that address is a file: it became a download and its tab closed. Read it as text with: fetch url=<address>" };
+      try {
+        if (c.wait) t = await waitLoaded(id);
+      } catch (e) {
+        if (!(await chrome.tabs.get(id).catch(() => null))) return gone;
+        return { ok: false, tab: id, error: "the page did not load: " + errText(e) };
+      }
+      await sleepMs(c.wait ? 300 : 900);
+      t = await chrome.tabs.get(id).catch(() => null);
+      if (!t) return gone;
       return { ok: true, tab: tabRow(t) };
     },
     close: async (c) => {
@@ -1119,6 +1275,12 @@ export function makeCtl(deps) {
     },
     activate: async (c) => {
       const t = await resolveTab(c.tab);
+      // In a person's window, an agent wakes the tab where it is; it is shown (the person's view
+      // changed, their window raised) only when asked with show=true (review 2, 3.4).
+      if (!agentProfileOnly() && c.show !== true) {
+        if (t.discarded) await chrome.tabs.reload(t.id);
+        return { ok: true, tab: tabRow(await waitLoaded(t.id, 15000)), shown: false, note: "woken in place: this is a person's window (add show=true to show it to them)" };
+      }
       await chrome.tabs.update(t.id, { active: true });
       await chrome.windows.update(t.windowId, { focused: true });
       return { ok: true, tab: tabRow(await waitLoaded(t.id, 15000)) };
@@ -1224,10 +1386,12 @@ export function makeCtl(deps) {
     },
     "window-focus": async (c) => {
       need(c, "window");
+      if (!agentProfileOnly() && c.show !== true) return { ok: false, error: "this is a person's window: it is raised only with show=true" };
       return { ok: true, window: windowRow(await chrome.windows.update(c.window, { focused: true })) };
     },
     "window-set": async (c) => {
       need(c, "window");
+      if (!agentProfileOnly() && c.show !== true) return { ok: false, error: "this is a person's window: it is moved or resized only with show=true" };
       const bounds = pick(c, ["left", "top", "width", "height"]);
       let w = null;
       // The browser refuses a position together with maximized, minimized or fullscreen.
@@ -1490,7 +1654,18 @@ export function makeCtl(deps) {
     "capture-get": async (c) => {
       need(c, "id");
       const r = await deps.capture.get(String(c.id));
-      return r ? { ok: true, ...r } : { ok: false, error: "no recorded request " + c.id };
+      if (!r) return { ok: false, error: "no recorded request " + c.id };
+      // An agent sees sign-in headers as their length (review 2, 3.2); the person's own Security
+      // page keeps them, for a replay on a target they may test.
+      const secret = /^(cookie|set-cookie|authorization|proxy-authorization|x-api-key|x-auth-token|x-csrf-token)$/i;
+      const hide = (list) => (Array.isArray(list) ? list.map((h) => (h && secret.test(h.name) ? { ...h, value: `(${String(h.value ?? "").length} characters)` } : h)) : list);
+      const out = JSON.parse(JSON.stringify(r));
+      // Every headers list wherever it sits (record.requestHeaders, ...; review 3, A5).
+      const walk = (o) => { if (!o || typeof o !== "object") return; for (const k of Object.keys(o)) { if (/headers$/i.test(k)) o[k] = hide(o[k]); else walk(o[k]); } };
+      walk(out);
+      // A curl command carries the same headers: given only when it holds none of them.
+      if (typeof out.curl === "string" && /-H\s+'(cookie|set-cookie|authorization|proxy-authorization|x-api-key|x-auth-token|x-csrf-token)\s*:/i.test(out.curl)) out.curl = "(not given to agents: it holds sign-in headers)";
+      return { ok: true, ...out };
     },
     "capture-clear": async () => deps.capture.clear(),
 
@@ -1526,6 +1701,7 @@ export function makeCtl(deps) {
 
     // ---- sessions
     "session-list": async () => ({ ok: true, sessions: await deps.sessionList() }),
+    fork: async (c) => (need(c, "name"), deps.fork ? deps.fork(String(c.name), c.hidden !== false) : { ok: false, error: "fork is not available here" }),
     "session-save": async (c) => {
       const bad = sessionNameError(c.name);
       if (bad) return { ok: false, error: bad };
@@ -1542,30 +1718,78 @@ export function makeCtl(deps) {
 
     // ---- cookies (only where the extension was given the permission: the agent profile)
     cookies: async (c) => {
-      if (!chrome.cookies) return { ok: false, error: "cookies are only available in the agent profile" };
+      if (!agentProfileOnly()) return { ok: false, error: "cookies are only available in the agent profile" };
       if (!c.url && !c.domain) return { ok: false, error: "cookies needs url=<address> or domain=<domain>" };
       const found = await chrome.cookies.getAll(c.url ? { url: String(c.url) } : { domain: String(c.domain) });
       return { ok: true, cookies: found.map((k) => ({ name: k.name, value: k.value, domain: k.domain, path: k.path, secure: k.secure, httpOnly: k.httpOnly, sameSite: k.sameSite, expires: k.expirationDate || null })) };
     },
     "cookie-set": async (c) => {
-      if (!chrome.cookies) return { ok: false, error: "cookies are only available in the agent profile" };
+      if (!agentProfileOnly()) return { ok: false, error: "cookies are only available in the agent profile" };
       need(c, "url", "name", "value");
       const set = await chrome.cookies.set({ url: String(c.url), name: String(c.name), value: String(c.value), ...(c.path ? { path: String(c.path) } : {}), ...(c.secure === true ? { secure: true } : {}), ...(c.httpOnly === true ? { httpOnly: true } : {}) });
       return set ? { ok: true, cookie: { name: set.name, domain: set.domain, path: set.path } } : { ok: false, error: "the browser refused that cookie" };
     },
     "cookie-remove": async (c) => {
-      if (!chrome.cookies) return { ok: false, error: "cookies are only available in the agent profile" };
+      if (!agentProfileOnly()) return { ok: false, error: "cookies are only available in the agent profile" };
       need(c, "url", "name");
       const removed = await chrome.cookies.remove({ url: String(c.url), name: String(c.name) });
       return { ok: !!removed, ...(removed ? {} : { error: "no such cookie" }) };
     },
   };
 
+  // ---- run: a list of commands in one call (agents: one round trip instead of forty; Nov 16 2026)
+  // Each step goes through ctl like a single command (permission, wake, ids). tab= given to run
+  // is every step's tab unless the step names its own. {"op":"pause","ms":n} waits n ms.
+  const RUN_MAX_STEPS = 200;
+  const RUN_MAX_MS = 120000;
+  handlers.run = async (c) => {
+    const steps = c.steps;
+    if (!Array.isArray(steps) || !steps.length) return { ok: false, error: "run needs steps: a JSON list given with file=<steps.json> (or file=- for standard input)" };
+    if (steps.length > RUN_MAX_STEPS) return { ok: false, error: `at most ${RUN_MAX_STEPS} steps in one run` };
+    // Every step checked before any runs: a typo in step 30 must not leave steps 1 to 29 done.
+    for (const [i, st] of steps.entries()) {
+      if (!st || typeof st !== "object" || Array.isArray(st) || typeof st.op !== "string") return { ok: false, step: i, error: `step ${i}: each step is an object with "op"` };
+      if (st.op === "run") return { ok: false, step: i, error: `step ${i}: a run cannot hold another run` };
+      if (st.op === "pause") {
+        if (!(Number(st.ms) >= 0 && Number(st.ms) <= 30000)) return { ok: false, step: i, error: `step ${i}: pause needs ms between 0 and 30000` };
+        continue;
+      }
+      if (!Object.hasOwn(handlers, st.op)) return { ok: false, step: i, error: `step ${i}: unknown command '${st.op}'` };
+    }
+    const started = Date.now();
+    const results = [];
+    for (const [i, st] of steps.entries()) {
+      if (Date.now() - started > RUN_MAX_MS) return { ok: false, done: i, results, step: i, error: `the run took over ${RUN_MAX_MS / 1000} s: stopped before step ${i}` };
+      if (st.op === "pause") {
+        // Never past the run's own limit (review 1, #23).
+        await sleepMs(Math.max(0, Math.min(Number(st.ms), RUN_MAX_MS - (Date.now() - started))));
+        results.push({ step: i, op: "pause", ok: true });
+        continue;
+      }
+      const cmd = { ...st, ...(st.tab === undefined && c.tab !== undefined ? { tab: c.tab } : {}) };
+      let r;
+      const left = RUN_MAX_MS - (Date.now() - started);
+      try {
+        r = await Promise.race([ctl(cmd), sleepMs(Math.max(1000, left)).then(() => ({ ok: false, error: `the run reached its ${RUN_MAX_MS / 1000} s limit during step ${i}` }))]);
+      } catch (e) {
+        r = { ok: false, error: errText(e) };
+      }
+      results.push({ step: i, ...r });
+      if (!r || r.ok === false) {
+        // What the page shows now, so the agent can decide without another call.
+        const page = await ctl({ op: "text", max: 3000, ...(cmd.tab !== undefined ? { tab: cmd.tab } : {}) }).catch(() => null);
+        return { ok: false, done: i, step: i, op: st.op, error: (r && r.error) || "the step failed", results, ...(page && page.ok ? { pageText: page.text } : {}) };
+      }
+    }
+    return { ok: true, done: steps.length, results, ms: Date.now() - started };
+  };
+
   async function ctl(cmd) {
     const handler = Object.hasOwn(handlers, cmd.op) ? handlers[cmd.op] : null;
     if (!handler) return { ok: false, error: "unknown command '" + cmd.op + "'. Try: gamblium ctl help" };
-    if (NEEDS_PERMISSION.has(cmd.op) && deps.permit) {
-      const p = await deps.permit(cmd.op);
+    // Switching download rules on or off is a settings change too (review 2, 3.3).
+    if ((NEEDS_PERMISSION.has(cmd.op) || (cmd.op === "download-rules" && cmd.enabled !== undefined)) && deps.permit) {
+      const p = await deps.permit(NEEDS_PERMISSION.has(cmd.op) ? cmd.op : "settings-set");
       if (!p || p.allowed !== true) {
         const asked = !!(p && p.asked);
         return {

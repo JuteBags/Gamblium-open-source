@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/gamblium", "crates/gamblium-dl"]
+members = ["crates/gamblium", "crates/gamblium-dl", "crates/gamblium-lyrics"]
+exclude = ["crates/gamblium-pdf"]
 
 [profile.release]
 opt-level = "s"

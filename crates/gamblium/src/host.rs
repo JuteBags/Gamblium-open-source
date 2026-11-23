@@ -151,6 +151,14 @@ fn text<'a>(req: &'a Value, key: &str) -> Result<&'a str, String> {
 /// Handles one request. `browser_pid` is the browser that started us, if known.
 pub fn handle(req: &Value, browser_pid: Option<u32>) -> Result<Value, String> {
     match req["type"].as_str().unwrap_or("") {
+        // The extension runs the code that is on disk: noted in its profile folder, so the
+        // launcher knows when a hidden start for new code is needed (codestamp.rs).
+        "code-stamp" => {
+            let stamp = req["stamp"].as_str().filter(|s| !s.is_empty() && s.len() < 200).ok_or("'stamp' is missing")?;
+            let dir = profile_of(browser_pid).ok_or("the browser's profile folder is not known")?;
+            std::fs::write(std::path::Path::new(&dir).join(crate::codestamp::RUNNING), stamp).map_err(|e| e.to_string())?;
+            Ok(json!({ "noted": true }))
+        }
         "ping" => {
             // The profile folder of the browser we belong to; null means Brave's default one.
             let dir = browser_pid
@@ -175,7 +183,11 @@ pub fn handle(req: &Value, browser_pid: Option<u32>) -> Result<Value, String> {
             let brave_version = folder.as_ref().and_then(|d| std::fs::read_to_string(d.join("Last Version")).ok()).and_then(|t| brave_version_of(&t));
             // Installed anew (not updated): the welcome page shows again, once (owner, Nov 14 2026).
             let new_install = folder.as_ref().is_some_and(|d| d.join(WELCOME_AGAIN).is_file());
-            Ok(json!({ "version": env!("CARGO_PKG_VERSION"), "browserPid": browser_pid, "userDataDir": dir, "theme": theme, "freeze": freeze, "welcome": welcome, "pentest": pentest, "braveVersion": brave_version, "newInstall": new_install, "forceDark": force_dark }))
+            // The browser's own PDF page is Gamblium PDF (rebranded copy): PDFs are left to it.
+            let builtin_pdf = folder.as_ref().is_some_and(|d| crate::launch::read_builtin_pdf(d));
+            // A window a person looks at: the one onboarding after an update may show there.
+            let seen = folder.as_ref().is_some_and(|d| crate::launch::read_launch_seen(d));
+            Ok(json!({ "version": env!("CARGO_PKG_VERSION"), "browserPid": browser_pid, "userDataDir": dir, "theme": theme, "freeze": freeze, "welcome": welcome, "seen": seen, "pentest": pentest, "braveVersion": brave_version, "newInstall": new_install, "forceDark": force_dark, "builtinPdf": builtin_pdf }))
         }
         // The welcome page was opened for a new install: forget the request.
         "welcome-done" => {
@@ -219,7 +231,30 @@ pub fn handle(req: &Value, browser_pid: Option<u32>) -> Result<Value, String> {
         // starts Gamblium again. The extension then closes the windows.
         "update-restart" => {
             let installer = crate::update::ready_installer(env!("CARGO_PKG_VERSION")).ok_or("no update is ready")?;
-            crate::update::start_apply(&installer, true)?;
+            // Who asked, noted before this browser closes itself: a session comes back in its
+            // window, the owner's own Gamblium comes back as itself (review 3, A7 and A15).
+            let from = profile_of(browser_pid);
+            let owners = matches!((&crate::install::profile_dir(), &from), (Some(m), Some(f)) if crate::dl::profile_key(m) == crate::dl::profile_key(std::path::Path::new(f)));
+            let session = from.as_deref().map(std::path::Path::new).filter(|d| crate::sessions::is_session_folder(d)).and_then(|d| d.file_name()).map(|n| n.to_string_lossy().into_owned());
+            // The update waits for the owner's own Gamblium to close: asked from another window while
+            // it is open, this window would close, wait 10 minutes and come back with nothing
+            // installed (review 9, G10). Said before anything closes.
+            if !owners && users_gamblium_is_open() {
+                return Err("close your own Gamblium window first (the update is installed when it is closed), then Restart to update again".into());
+            }
+            // Noted before the updater starts (it reads and deletes the note first thing; noted
+            // after, a quick updater missed it and the note stayed for the next update: review 10,
+            // H10), and taken back when the start fails (review 9, G29).
+            crate::update::note_asked_by(if owners { Some("main") } else { session.as_deref() });
+            if let Err(e) = crate::update::start_apply(&installer, true) {
+                crate::update::note_asked_by(None);
+                if !owners {
+                    if let Some(id) = session.as_deref() {
+                        crate::update::forget_reopen(id);
+                    }
+                }
+                return Err(e);
+            }
             Ok(json!({ "applying": true }))
         }
         "open-tor" => {
@@ -278,6 +313,7 @@ pub fn handle(req: &Value, browser_pid: Option<u32>) -> Result<Value, String> {
             Ok(json!({
                 "copy": crate::rebrand::describe(official), "official": crate::rebrand::wants_official(),
                 "darkPages": crate::rebrand::wants_dark_pages(), "theme": crate::rebrand::chosen_theme(), "themes": themes,
+                "incomplete": crate::rebrand::incomplete(),
             }))
         }
         "brand-set" => {
@@ -315,7 +351,8 @@ pub fn handle(req: &Value, browser_pid: Option<u32>) -> Result<Value, String> {
         // Logins agents may use (logins.rs): kept, listed and removed only from the owner's own
         // browser; handed to the extension for one page, only with the owner's yes.
         "login-list" | "login-save" | "login-remove" => {
-            if profile_of(browser_pid).is_some_and(|d| std::path::Path::new(&d).join(crate::launch::AGENT_MARKER).is_file()) {
+            // An unknown browser counts as an agent's: the guard fails closed (review 2, 1.24).
+            if profile_of(browser_pid).is_none_or(|d| std::path::Path::new(&d).join(crate::launch::AGENT_MARKER).is_file()) {
                 return Err("logins for agents are kept in the owner's own Gamblium, not from an agent's browser".into());
             }
             let s = |k: &str| req[k].as_str().unwrap_or("").to_owned();
@@ -329,13 +366,29 @@ pub fn handle(req: &Value, browser_pid: Option<u32>) -> Result<Value, String> {
             let host = req["host"].as_str().ok_or("'host' (the page's) is missing")?;
             let now = crate::permit::now();
             let mut state = crate::permit::load();
-            if !crate::permit::allowed(&state, "logins", now) {
-                let profile = profile_of(browser_pid).map(|d| profile_label(&d)).unwrap_or_else(|| "an agent".into());
-                let show = crate::permit::ask(&mut state, "logins", &format!("login {host}"), &profile, now)?;
+            // Asked and given for this site and this browser only; a yes for all logins given
+            // earlier still holds until it runs out (review 2, 1.6).
+            let folder = profile_of(browser_pid);
+            let profile = folder.as_deref().map(profile_label).unwrap_or_else(|| "an agent".into());
+            let site = host.trim().trim_end_matches('.').to_ascii_lowercase();
+            // Keyed by the browser's folder (its last name, a session's id), not its label: two
+            // folders with one label, or a session made again under an old name, do not share a
+            // yes; a browser of unknown folder gets none kept (review 9, G21).
+            let who = folder.as_deref().map(|d| d.trim_end_matches(['\\', '/']).rsplit(['\\', '/']).next().unwrap_or("").to_ascii_lowercase()).unwrap_or_default();
+            // A browser whose folder cannot be told gets no question (a new key each try opened a
+            // new question tab every second: review 10, H14); only a yes for all logins serves it.
+            if who.is_empty() && !crate::permit::allowed(&state, "logins", now) {
+                return Err("this browser's folder could not be told, so no saved login is given to it without a yes for all logins; try again".into());
+            }
+            let key = format!("logins:{site}|{who}");
+            if !crate::permit::allowed(&state, "logins", now) && !crate::permit::allowed(&state, &key, now) {
+                let show = crate::permit::ask(&mut state, &key, &format!("login {host}"), &profile, now)?;
                 crate::permit::save(&state)?;
                 let open = users_gamblium_is_open();
                 if show && open {
-                    show_in_users_gamblium("ui/permit.html?what=logins");
+                    let mut q = url::form_urlencoded::Serializer::new(String::new());
+                    q.append_pair("what", &key);
+                    show_in_users_gamblium(&format!("ui/permit.html?{}", q.finish()));
                 }
                 return Ok(json!({ "allowed": false, "asked": open }));
             }
@@ -367,7 +420,8 @@ pub fn handle(req: &Value, browser_pid: Option<u32>) -> Result<Value, String> {
         }
         "permit-set" => {
             // Only a browser the user sits in may answer.
-            if profile_of(browser_pid).is_some_and(|d| std::path::Path::new(&d).join(crate::launch::AGENT_MARKER).is_file()) {
+            // An unknown browser counts as an agent's: the guard fails closed (review 2, 1.24).
+            if profile_of(browser_pid).is_none_or(|d| std::path::Path::new(&d).join(crate::launch::AGENT_MARKER).is_file()) {
                 return Err("an agent's browser cannot give this permission; it is given in the user's own Gamblium".into());
             }
             let what = req["what"].as_str().unwrap_or("settings");
@@ -381,13 +435,116 @@ pub fn handle(req: &Value, browser_pid: Option<u32>) -> Result<Value, String> {
         // Named sessions (gamblium-cli) for the Sessions page: list them, make,
         // show, hide, stop or delete one, and set what one applies. Commands
         // inside a session are not reachable from here: those are an agent's.
+        // Fork: a new session with this browser's sign-ins and no tabs (sessions.rs).
+        "session-fork" => {
+            let name = req["name"].as_str().map(str::trim).filter(|n| !n.is_empty()).ok_or("give the new session a name")?;
+            let parent = req["parent"].as_str().unwrap_or("main");
+            if !req["cookies"].is_array() {
+                return Err("no sign-ins were sent".into());
+            }
+            // Where the cookies really come from: the folder of the browser this helper serves, not
+            // the name it sends (a session named like Work's id passed the old check; review 6, D1).
+            let from = profile_of(browser_pid);
+            crate::sessions::fork_from_cookies(name, parent, from.as_deref(), &req["cookies"].to_string(), req["hidden"].as_bool().unwrap_or(false), if req["kind"] == "main" { "main" } else { "child" })
+        }
+        // What `gamblium-cli list` shows of the owner's own browser: its open tabs and saved tab
+        // sets, sealed for this Windows user (sessions.rs CLI_VIEW). Only the owner's own profile.
+        // Recently closed (owner, Nov 20 2026): each browser keeps its list; the default window
+        // reads them all.
+        "closed-mirror" => {
+            let saved = match profile_of(browser_pid) {
+                Some(f) => crate::sessions::save_closed(std::path::Path::new(&f), &req["items"])?,
+                None => false,
+            };
+            Ok(json!({ "ok": true, "saved": saved }))
+        }
+        "closed-all" => Ok(crate::sessions::closed_all(profile_of(browser_pid).as_deref())),
+        // An address opened in the owner's own Gamblium (from the default window's Recently
+        // closed): handed to it if it runs, else it starts with it, the way its icon starts it.
+        "open-in-main" => {
+            let url = req["url"].as_str().unwrap_or("");
+            if !is_web_address(url) {
+                return Err("not a web address".into());
+            }
+            let own = crate::install::profile_dir().ok_or("LOCALAPPDATA is not set")?;
+            let running = procs::browsers("brave.exe").into_iter().any(|(_, d)| d.as_deref().is_some_and(|d| crate::dl::profile_key(std::path::Path::new(d)) == crate::dl::profile_key(&own)));
+            if running {
+                let browser = crate::rebrand::copy_dir().map(|d| d.join("brave.exe")).filter(|p| p.is_file()).ok_or("the Gamblium browser copy is missing")?;
+                crate::launch::spawn_detached(&browser, &[format!("--user-data-dir={}", own.display()), url.to_owned()]).map_err(|e| e.to_string())?;
+            } else {
+                let me = std::env::current_exe().map_err(|e| e.to_string())?;
+                crate::launch::spawn_detached(&me, &["launch".into(), "--user-data-dir".into(), own.to_string_lossy().into_owned(), "--theme".into(), "moon-dark".into(), "--auto-dark".into(), "--".into(), url.to_owned()]).map_err(|e| e.to_string())?;
+            }
+            Ok(json!({ "ok": true }))
+        }
+        "cli-view" => {
+            let mine = crate::install::profile_dir();
+            let from = profile_of(browser_pid);
+            let is_owner = matches!((&mine, &from), (Some(m), Some(f)) if crate::dl::profile_key(m) == crate::dl::profile_key(std::path::Path::new(f)));
+            if !is_owner {
+                // A session's own browser: its open tabs, for the Session manager and Recent sessions.
+                if let Some(f) = from {
+                    if crate::sessions::write_session_view(std::path::Path::new(&f), &req["view"])? {
+                        return Ok(json!({ "ok": true, "session": true }));
+                    }
+                }
+                return Ok(json!({ "skipped": "only the owner's own Gamblium and sessions are listed this way" }));
+            }
+            crate::sessions::write_cli_view(&req["view"])?;
+            Ok(json!({ "ok": true }))
+        }
+        // `gamblium-cli fork <name>` from the owner's own browser: what is waiting for their yes,
+        // and its end (allowed and made, or turned down). Only the owner's browser sees it.
+        "fork-ask" | "fork-ask-done" => {
+            // An unknown browser counts as an agent's: the guard fails closed (review 2, 1.24).
+            if profile_of(browser_pid).is_none_or(|d| std::path::Path::new(&d).join(crate::launch::AGENT_MARKER).is_file()) {
+                return Err("only your own Gamblium answers a fork".into());
+            }
+            let file = crate::sessions::fork_ask_file().ok_or("LOCALAPPDATA is not set")?;
+            if req["type"] == "fork-ask-done" {
+                let _ = std::fs::remove_file(&file);
+                return Ok(json!({ "done": true }));
+            }
+            let ask: Value = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let fresh = ask["at"].as_u64().is_some_and(|at| now.saturating_sub(at) < crate::sessions::FORK_ASK_SECS);
+            Ok(if fresh { json!({ "ask": ask }) } else { json!({ "none": true }) })
+        }
+        // A forked session's browser taking its sign-ins: a slice at a time, then the file goes.
+        "fork-cookies" | "fork-done" => {
+            let dir = browser_pid
+                .and_then(|pid| procs::browsers("brave.exe").into_iter().find(|(p, _)| *p == pid))
+                .and_then(|(_, dir)| dir)
+                .map(std::path::PathBuf::from)
+                .ok_or("the browser's profile folder is not known")?;
+            if req["type"] == "fork-done" {
+                let _ = std::fs::remove_file(dir.join(crate::sessions::FORK_FILE));
+                return Ok(json!({ "done": true }));
+            }
+            let from = req["from"].as_u64().unwrap_or(0) as usize;
+            Ok(crate::sessions::fork_cookies(&dir, from, 300)?.unwrap_or_else(|| json!({ "none": true })))
+        }
         "named-sessions" => {
             let mut args: Vec<String> = req["args"].as_array().into_iter().flatten().filter_map(|a| a.as_str().map(str::to_owned)).collect();
             if args.is_empty() {
                 args.push("list".into());
             }
-            if !["list", "create", "open", "hide", "close", "delete", "set", "open-url"].contains(&args[0].as_str()) {
+            // fork / clone from the page only between named sessions: the owner's own sign-ins
+            // leave through the page's own Fork button, never by name from here.
+            // A fork of the owner's own Gamblium (from=main or from=default) always asks the owner
+            // in their own window first (sessions::fork_from_main); any other needs from=<name>.
+            if matches!(args[0].as_str(), "fork") && !args.iter().any(|a| a.starts_with("from=")) {
+                return Err("the page forks a session with from=<its name> (or from=default)".into());
+            }
+            if !["list", "create", "open", "hide", "close", "delete", "set", "open-url", "fork", "clone", "rename", "focus"].contains(&args[0].as_str()) {
                 return Err(format!("'{}' is not something the Sessions page may ask", args[0]));
+            }
+            // Only a browser a person sits in may ask: an unknown caller (this helper run from a
+            // shell) or an agent's browser counts as an agent, and gets the terminal's rules
+            // (review 6/7, E2: `set Work proxy=` through the helper had no check).
+            let agentish = profile_of(browser_pid).is_none_or(|d| std::path::Path::new(&d).join(crate::launch::AGENT_MARKER).is_file());
+            if agentish {
+                crate::sessions::cli_may(&args)?;
             }
             let answer = crate::sessions::command(&args)?;
             if args[0] == "create" {
@@ -409,6 +566,97 @@ pub fn handle(req: &Value, browser_pid: Option<u32>) -> Result<Value, String> {
             let blob = req["sealed"].as_str().and_then(decode_base64).ok_or("'sealed' is missing or not base64")?;
             let key = crate::vault::key_for(crate::vault::Purpose::Sessions)?;
             Ok(json!({ "text": crate::vault::open_text(&key, crate::vault::Purpose::Sessions, label, &blob)? }))
+        }
+        // A PDF file on this computer for Gamblium PDF (opened from Explorer, or dropped on the
+        // browser), read in pieces: a helper answer must stay under 1 MB. Only files ending in
+        // .pdf, and only for the extension's own pages (the extension checks who asks).
+        "pdf-read" => {
+            let url = req["url"].as_str().ok_or("'url' is missing")?;
+            let path = url::Url::parse(url).ok().filter(|u| u.scheme() == "file").and_then(|u| u.to_file_path().ok()).ok_or("not a file address")?;
+            if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+                return Err("only PDF files".into());
+            }
+            pdf_piece(&path, req["offset"].as_u64().unwrap_or(0))
+        }
+        // The owner's own Gamblium, from Recent sessions on the New Tab page: started, or (already
+        // running) given a new window, as its own icon would.
+        // Global memory (sessions.rs): every browser of the owner reads it; onboarding writes it.
+        // The floating lyrics' look (Settings > Look > Floating lyrics). Read from gamblium-lyrics
+        // itself (it knows the presets); changes merged into its style.json, which an open lyrics
+        // window re-reads. A new preset clears the colour / effect changes, keeps the rest.
+        "lyrics-style-get" => {
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?.with_file_name("gamblium-lyrics.exe");
+            let mut cmd = std::process::Command::new(exe);
+            cmd.arg("--style-json").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+            let out = crate::launch::no_console_window(&mut cmd).output().map_err(|e| format!("lyrics window not installed: {e}"))?;
+            let v: Value = serde_json::from_slice(&out.stdout).map_err(|e| format!("lyrics look: {e}"))?;
+            Ok(json!({ "ok": true, "style": v["style"], "presets": v["presets"] }))
+        }
+        // The person's own seek bar knob (Settings > Floating lyrics): a PNG, JPEG or WebP picture,
+        // checked by its first bytes, at most 1 MB, saved as Gamblium\lyrics\knob.png (the lyrics
+        // window reads any of the three whatever the name), and the knob set to it.
+        "lyrics-knob-upload" => {
+            let bytes = req["data"].as_str().and_then(decode_base64).ok_or("'data' is missing or not base64")?;
+            if bytes.len() > 1 << 20 {
+                return Err("the picture is larger than 1 MB".into());
+            }
+            let png = bytes.starts_with(&[0x89, b'P', b'N', b'G']);
+            let jpeg = bytes.starts_with(&[0xff, 0xd8, 0xff]);
+            let webp = bytes.len() > 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP";
+            if !(png || jpeg || webp) {
+                return Err("only PNG, JPEG or WebP pictures".into());
+            }
+            let dir = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Gamblium").join("lyrics")).ok_or("LOCALAPPDATA is not set")?;
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            std::fs::write(dir.join("knob.png"), &bytes).map_err(|e| e.to_string())?;
+            let file = dir.join("style.json");
+            let mut mine: serde_json::Map<String, Value> = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+            mine.insert("knob".into(), json!("custom"));
+            std::fs::write(&file, serde_json::to_string_pretty(&mine).unwrap_or_default()).map_err(|e| e.to_string())?;
+            Ok(json!({ "ok": true }))
+        }
+        "lyrics-style-set" => {
+            let Some(changes) = req["changes"].as_object() else { return Err("lyrics-style-set needs changes".into()) };
+            let dir = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Gamblium").join("lyrics")).ok_or("LOCALAPPDATA is not set")?;
+            let file = dir.join("style.json");
+            let mut mine: serde_json::Map<String, Value> = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+            if changes.contains_key("preset") {
+                // The same list as gamblium-lyrics style::KEEP: what a person keeps across looks.
+                const KEEP: [&str; 12] = ["layout", "script", "lines", "offset_ms", "click_through", "width", "card_width", "progress_bar", "words_seek_bar", "knob", "knob_size", "knob_color"];
+                mine.retain(|k, _| KEEP.contains(&k.as_str()));
+            }
+            for (k, v) in changes {
+                // Only plain values: the file is the lyrics window's, not a place for anything else.
+                if k.len() <= 40 && (v.is_string() || v.is_number() || v.is_boolean() || v.is_null()) {
+                    mine.insert(k.clone(), v.clone());
+                }
+            }
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            std::fs::write(&file, serde_json::to_string_pretty(&mine).unwrap_or_default()).map_err(|e| e.to_string())?;
+            Ok(json!({ "ok": true }))
+        }
+        "global-get" => Ok(json!({ "ok": true, "global": crate::sessions::global_get() })),
+        "global-set" => {
+            if !req["look"].is_object() {
+                return Err("global-set needs look".into());
+            }
+            let written = crate::sessions::global_set(&req["look"], req["ifEmpty"] == true)?;
+            Ok(json!({ "ok": true, "written": written }))
+        }
+        "start-main" => {
+            // Already open (owner, Nov 16 2026: a click on Personal opened a second, small window):
+            // its window comes to the front.
+            if let Some(own) = crate::install::profile_dir() {
+                let pid = procs::browsers("brave.exe").into_iter().find(|(_, d)| d.as_deref().is_some_and(|d| crate::dl::profile_key(std::path::Path::new(d)) == crate::dl::profile_key(&own))).map(|(p, _)| p);
+                if let Some(pid) = pid {
+                    if crate::capture::bring_forward(pid) {
+                        return Ok(json!({ "focused": true }));
+                    }
+                }
+            }
+            let me = std::env::current_exe().map_err(|e| e.to_string())?;
+            crate::launch::spawn_detached(&me.with_file_name("gamblium-app.exe"), &["--main".to_owned()]).map_err(|e| e.to_string())?;
+            Ok(json!({ "started": true }))
         }
         // Downloads handed to our own downloader (see dl.rs).
         "dl-start" => {
@@ -451,8 +699,15 @@ pub fn handle(req: &Value, browser_pid: Option<u32>) -> Result<Value, String> {
         "restart" => {
             let pid = browser_pid.ok_or("the browser that started the helper is not known")?;
             let dir = procs::browsers("brave.exe").into_iter().find(|(p, _)| *p == pid).and_then(|(_, d)| d).ok_or("the main Brave profile is not restarted from here")?;
+            // The launcher's hidden start for new extension code (codestamp.rs): noted, not restarted.
+            let folder = std::path::Path::new(&dir);
+            if folder.join(crate::codestamp::PRESTART).is_file() {
+                let _ = std::fs::write(folder.join(crate::codestamp::RELOADED), "");
+                return Ok(json!({ "restarting": false, "prestart": true }));
+            }
             let me = std::env::current_exe().map_err(|e| e.to_string())?;
-            crate::launch::spawn_detached(&me, &["relaunch".into(), "--pid".into(), pid.to_string(), "--user-data-dir".into(), dir])
+            crate::launch::relaunch_log(&format!("helper: restart asked for browser {pid} ({dir})"));
+            crate::launch::spawn_outliving(&me, &["relaunch".into(), "--pid".into(), pid.to_string(), "--user-data-dir".into(), dir])
                 .map_err(|e| format!("could not start the restart: {e}"))?;
             Ok(json!({ "restarting": true }))
         }
@@ -611,12 +866,78 @@ fn send(out: &Out, value: &Value) -> io::Result<()> {
 }
 
 /// One command from a client: a single line of JSON in, a single line out.
-fn serve_client(stream: TcpStream, token: &str, out: &Out, pending: &Pending, next_id: &AtomicU64, who: &str) {
+/// What a bridge to a person's own browser (Work, or the owner's own Gamblium) does without the
+/// owner's yes: what Gamblium itself uses to close, bring back and show their windows (status, the
+/// tab list, putting tabs back and to sleep, Go to session, opening an address). Reading or acting
+/// on a page (text, eval, click, type, cookies, pictures, fork) is not among them.
+pub const PERSON_FREE_OPS: [&str; 2] = ["info", "ping"];
+
+/// The owner's yes for agents in their own windows ("person"), asked in that window itself (and
+/// in their own Gamblium if open). Checked here, where every path to a browser passes: the CLI,
+/// `gamblium ctl --profile`, scripts (review 8, F1: only gamblium-cli asked).
+fn person_gate(cmd: &Value, own: bool, person: Option<&(String, String)>) -> Result<(), Value> {
+    let Some((dir, label)) = person else { return Ok(()) };
+    // Gamblium's own requests (sessions.rs: bringing tabs back, closing, Go to session, opening an
+    // address, the owner's Fork and Clone): marked by the caller, never by the agent CLIs
+    // (`gamblium-cli <session> <command>`, `gamblium ctl`). A script with the token can forge the
+    // mark, as it can read the profile's files (review 2, 1.5). Review 9, G3 and G4: the tab list,
+    // `open` and the rest were free to agents too, and the owner's Fork of Work was refused.
+    if own {
+        return Ok(());
+    }
+    let op = cmd["op"].as_str().unwrap_or("");
+    if PERSON_FREE_OPS.contains(&op) {
+        return Ok(());
+    }
+    let now = crate::permit::now();
+    let mut state = crate::permit::load();
+    if crate::permit::allowed(&state, "person", now) {
+        return Ok(());
+    }
+    // One question per window, whatever the command: a new tab for each op name was a stream of
+    // tabs (review 9, G8).
+    let _ = op;
+    let show = crate::permit::ask(&mut state, "person", "agent commands", label, now).unwrap_or(false);
+    let _ = crate::permit::save(&state);
+    // Shown in that window, and in the owner's Gamblium unless that IS the window (review 10, H12:
+    // two tabs in Personal). The answer says only what was really shown (H13).
+    let mut shown = false;
+    if show && !dir.is_empty() {
+        show_in_profile(std::path::Path::new(dir), "ui/permit.html?what=person");
+        shown = true;
+    }
+    let owners = crate::install::profile_dir().is_some_and(|p| {
+        let real = |x: &std::path::Path| std::fs::canonicalize(x).unwrap_or_else(|_| x.to_path_buf());
+        real(&p) == real(std::path::Path::new(dir))
+    });
+    if show && !owners && users_gamblium_is_open() {
+        show_in_users_gamblium("ui/permit.html?what=person");
+        shown = true;
+    }
+    let where_ = if shown { "The question is shown in Gamblium" } else { "Allow it in Gamblium: Settings > Agents may work in your own session windows" };
+    Err(json!({ "ok": false, "error": format!("{label} is a person's own window: an agent works in it only with their yes. {where_}; try again once allowed") }))
+}
+
+/// Opens one of our pages as a tab in the browser running on `dir`.
+pub fn show_in_profile(dir: &std::path::Path, page: &str) {
+    if dir.as_os_str().is_empty() {
+        return;
+    }
+    let Some(browser) = crate::rebrand::copy_dir().map(|d| d.join("brave.exe")).filter(|p| p.is_file()) else { return };
+    let address = format!("chrome-extension://{EXTENSION_ID}/{page}");
+    let _ = crate::launch::spawn_detached(&browser, &[format!("--user-data-dir={}", dir.display()), address]);
+}
+
+fn serve_client(stream: TcpStream, token: &str, out: &Out, pending: &Pending, next_id: &AtomicU64, who: &str, person: Option<&(String, String)>) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let mut line = String::new();
     let reply = match BufReader::new(&stream).take(MAX_REPLY as u64).read_line(&mut line) {
         Ok(n) if n > 0 => match serde_json::from_str::<Value>(&line) {
-            Ok(req) if same_token(req["token"].as_str().unwrap_or(""), token) => {
+            Ok(req) if same_token(req["token"].as_str().unwrap_or(""), token) => 'served: {
+                if let Err(refused) = person_gate(&req["cmd"], req["own"] == true, person) {
+                    crate::agentlog::write(who, &req["cmd"], &refused, 0);
+                    break 'served refused;
+                }
                 let id = next_id.fetch_add(1, Ordering::Relaxed);
                 let (tx, rx) = mpsc::channel();
                 pending.lock().unwrap().insert(id, tx);
@@ -678,7 +999,8 @@ pub fn profile_label(dir: &str) -> String {
     let lower = dir.to_ascii_lowercase().replace('/', "\\");
     let last = dir.trim_end_matches(['\\', '/']).rsplit(['\\', '/']).next().unwrap_or(dir);
     if lower.contains("\\gamblium\\sessions\\") {
-        format!("the session '{last}'")
+        let name = crate::sessions::display_name(std::path::Path::new(dir)).unwrap_or_else(|| last.to_owned());
+        format!("the session '{name}'")
     } else if lower.trim_end_matches('\\').ends_with("agent-profile") {
         "the agent profile".into()
     } else {
@@ -686,12 +1008,17 @@ pub fn profile_label(dir: &str) -> String {
     }
 }
 
-fn users_gamblium_is_open() -> bool {
+pub fn users_gamblium_is_open() -> bool {
     crate::install::profile_dir().is_some_and(|p| procs::browser_running("brave.exe", Some(&p)))
 }
 
 /// Opens one of our pages as a tab in the user's own running Gamblium.
-fn show_in_users_gamblium(page: &str) {
+pub fn show_in_users_gamblium(page: &str) {
+    // Never starts it (owner, Nov 16 2026): a closed Personal started this way came up outside the
+    // launcher, with only the question page in a window of its own.
+    if !users_gamblium_is_open() {
+        return;
+    }
     let (Some(profile), Some(browser)) = (crate::install::profile_dir(), crate::rebrand::copy_dir().map(|d| d.join("brave.exe")).filter(|p| p.is_file())) else { return };
     let address = format!("chrome-extension://{EXTENSION_ID}/{page}");
     let _ = crate::launch::spawn_detached(&browser, &[format!("--user-data-dir={}", profile.display()), address]);
@@ -716,11 +1043,17 @@ fn start_bridge(browser_pid: Option<u32>, out: &Out, pending: &Pending) -> Resul
     std::fs::write(&file, serde_json::to_string(&info).unwrap()).map_err(|e| e.to_string())?;
     let (out, pending) = (out.clone(), pending.clone());
     let who = user_data_dir.as_deref().map(profile_label).unwrap_or_else(|| "the main profile".into());
+    // A person's own browser (a person's session, or the owner's own Gamblium): its folder and name.
+    // A browser whose folder is not known counts as a person's (fails closed; review 9, G17).
+    let unknown = user_data_dir.is_none().then(|| (String::new(), "this browser".to_owned()));
+    let person = user_data_dir.as_deref().map(std::path::Path::new).filter(|d| {
+        crate::sessions::person_folder(d) || crate::sessions::person_by_content(d) || crate::install::profile_dir().is_some_and(|m| crate::dl::profile_key(&m) == crate::dl::profile_key(d))
+    }).map(|d| (d.to_string_lossy().into_owned(), who.clone())).or(unknown);
     std::thread::spawn(move || {
         let next_id = Arc::new(AtomicU64::new(1));
         for stream in listener.incoming().flatten() {
-            let (token, out, pending, next_id, who) = (token.clone(), out.clone(), pending.clone(), next_id.clone(), who.clone());
-            std::thread::spawn(move || serve_client(stream, &token, &out, &pending, &next_id, &who));
+            let (token, out, pending, next_id, who, person) = (token.clone(), out.clone(), pending.clone(), next_id.clone(), who.clone(), person.clone());
+            std::thread::spawn(move || serve_client(stream, &token, &out, &pending, &next_id, &who, person.as_ref()));
         }
     });
     Ok(port)
@@ -730,13 +1063,20 @@ fn start_bridge(browser_pid: Option<u32>, out: &Out, pending: &Pending) -> Resul
 pub fn run() -> io::Result<()> {
     // Stored logins of downloads whose time is up are deleted first thing.
     crate::dl::sweep();
+    crate::sessions::pack_own_soon();
     let browser_pid = procs::browser_ancestor("brave.exe");
     // The look chosen in this browser's Settings belongs to its own profile.
     let profile = browser_pid.and_then(|pid| procs::browsers("brave.exe").into_iter().find(|(p, _)| *p == pid)).and_then(|(_, d)| d);
     crate::rebrand::look_belongs_to(profile.as_deref().map(std::path::Path::new));
+    // This browser's own kept archive too, once settled: sessions kept theirs until the next pack
+    // (review 6, D4). It runs while the browser is in use, so in_use() holds.
+    if let Some(p) = profile.as_deref() {
+        crate::pack::drop_previous_if_settled(std::path::Path::new(p));
+    }
     let out: Out = Arc::new(Mutex::new(io::stdout()));
     let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
     let mut bridge_file: Option<PathBuf> = None;
+    let mut lyrics: Option<(std::process::Child, std::process::ChildStdin)> = None;
     let stdin = io::stdin();
     let mut input = stdin.lock();
     while let Some(req) = read_message(&mut input)? {
@@ -745,6 +1085,35 @@ pub fn run() -> io::Result<()> {
             "ctl-reply" => {
                 if let Some(tx) = req["id"].as_u64().and_then(|id| pending.lock().unwrap().remove(&id)) {
                     let _ = tx.send(req["result"].clone());
+                }
+                continue;
+            }
+            // Floating lyrics (issue #242): this connection owns a gamblium-lyrics window. Messages
+            // go to it as JSON lines; its button presses come back as "lyrics-event". The window
+            // closes when this connection ends (its input ends).
+            "lyrics-start" => {
+                if lyrics.as_mut().is_some_and(|(c, _)| matches!(c.try_wait(), Ok(None))) {
+                    send(&out, &json!({ "type": "lyrics-started", "ok": true, "id": req["id"] }))?;
+                    continue;
+                }
+                let reply = match start_lyrics(&out) {
+                    Ok(pair) => {
+                        lyrics = Some(pair);
+                        json!({ "type": "lyrics-started", "ok": true, "id": req["id"] })
+                    }
+                    Err(e) => json!({ "type": "lyrics-started", "ok": false, "error": e, "id": req["id"] }),
+                };
+                send(&out, &reply)?;
+                continue;
+            }
+            "lyrics" => {
+                if let Some((_, input)) = lyrics.as_mut() {
+                    use std::io::Write;
+                    let line = format!("{}\n", req["msg"]);
+                    if input.write_all(line.as_bytes()).and_then(|_| input.flush()).is_err() {
+                        lyrics = None;
+                        send(&out, &json!({ "type": "lyrics-event", "what": "closed" }))?;
+                    }
                 }
                 continue;
             }
@@ -775,7 +1144,47 @@ pub fn run() -> io::Result<()> {
     if let Some(f) = bridge_file {
         let _ = std::fs::remove_file(f);
     }
+    // The lyrics window ends with this connection: its input closes, and it is stopped if it lingers.
+    if let Some((mut child, input)) = lyrics.take() {
+        drop(input);
+        for _ in 0..20 {
+            if !matches!(child.try_wait(), Ok(None)) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let _ = child.kill();
+    }
     Ok(())
+}
+
+/// Starts gamblium-lyrics (beside this program) with pipes; its stdout lines (button presses) are
+/// passed on to the extension as {"type":"lyrics-event", ...}.
+fn start_lyrics(out: &Out) -> Result<(std::process::Child, std::process::ChildStdin), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?.with_file_name("gamblium-lyrics.exe");
+    if !exe.is_file() {
+        return Err(format!("{} is not installed", exe.display()));
+    }
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
+    let mut child = crate::launch::no_console_window(&mut cmd).spawn().map_err(|e| format!("could not start the lyrics window: {e}"))?;
+    let input = child.stdin.take().ok_or("no input pipe")?;
+    let output = child.stdout.take().ok_or("no output pipe")?;
+    let out = out.clone();
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        for line in io::BufReader::new(output).lines() {
+            let Ok(line) = line else { break };
+            if let Ok(mut v) = serde_json::from_str::<Value>(&line) {
+                v["type"] = json!("lyrics-event");
+                if send(&out, &v).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = send(&out, &json!({ "type": "lyrics-event", "what": "closed" }));
+    });
+    Ok((child, input))
 }
 
 // ---- The client side: `gamblium ctl` -----------------------------------------------
@@ -841,9 +1250,14 @@ pub fn pick_bridge(mut bridges: Vec<BridgeInfo>, which: Option<&str>) -> Result<
 
 /// Sends one command and returns the extension's answer.
 pub fn ctl(bridge: &BridgeInfo, cmd: &Value, timeout_ms: u64) -> Result<Value, String> {
+    ctl_as(bridge, cmd, timeout_ms, false)
+}
+
+/// `own`: a request of Gamblium's own (sessions.rs), not an agent's; see person_gate.
+pub fn ctl_as(bridge: &BridgeInfo, cmd: &Value, timeout_ms: u64, own: bool) -> Result<Value, String> {
     let mut stream = TcpStream::connect(("127.0.0.1", bridge.port)).map_err(|e| format!("cannot reach the browser: {e}"))?;
     let _ = stream.set_read_timeout(Some(Duration::from_millis(timeout_ms + 5_000)));
-    let req = json!({ "token": bridge.token, "cmd": cmd, "timeout_ms": timeout_ms });
+    let req = json!({ "token": bridge.token, "cmd": cmd, "timeout_ms": timeout_ms, "own": own });
     stream.write_all(serde_json::to_string(&req).unwrap().as_bytes()).map_err(|e| e.to_string())?;
     stream.write_all(b"\n").map_err(|e| e.to_string())?;
     let mut line = String::new();
@@ -852,6 +1266,22 @@ pub fn ctl(bridge: &BridgeInfo, cmd: &Value, timeout_ms: u64) -> Result<Value, S
 }
 
 /// Standard base64 (with or without padding). None if the text is not base64.
+/// One piece of a PDF file: 600 KB, which is 800 KB as base64.
+pub fn pdf_piece(path: &std::path::Path, offset: u64) -> Result<Value, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    const PIECE: u64 = 600 * 1024;
+    let mut f = std::fs::File::open(path).map_err(|e| format!("cannot open the file ({e})"))?;
+    let size = f.metadata().map_err(|e| e.to_string())?.len();
+    if size > 1024 * 1024 * 1024 {
+        return Err("the file is larger than 1 GB".into());
+    }
+    f.seek(SeekFrom::Start(offset.min(size))).map_err(|e| e.to_string())?;
+    let mut buf = Vec::with_capacity(PIECE.min(size.saturating_sub(offset)) as usize);
+    f.take(PIECE).read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    Ok(json!({ "size": size, "offset": offset, "data": encode_base64(&buf), "name": name }))
+}
+
 pub fn encode_base64(bytes: &[u8]) -> String {
     const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -900,7 +1330,7 @@ const NUMBER_KEYS: &[&str] = &[
 ];
 const FLAG_KEYS: &[&str] = &[
     "wait", "background", "on", "submit", "gone", "cve", "errors", "closeAfter", "withPages", "withSettings", "enabled",
-    "routingEnabled", "secure", "httpOnly", "real", "full", "mobile",
+    "routingEnabled", "secure", "httpOnly", "real", "full", "mobile", "show",
 ];
 
 /// "tab=12 url=https://x wait=true" -> {"tab":12,"url":"https://x","wait":true}
@@ -912,6 +1342,24 @@ pub fn parse_ctl_args(op: &str, pairs: &[String]) -> Result<Value, String> {
         let (k, v) = pair.split_once('=').ok_or(format!("'{pair}' is not key=value"))?;
         if k.is_empty() || k == "op" {
             return Err(format!("'{pair}' is not key=value"));
+        }
+        // run: its steps from a file (or standard input), never the command line, where a shell
+        // would mangle the quotes.
+        if op == "run" && k == "file" {
+            let text = if v == "-" {
+                let mut s = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut s).map_err(|e| format!("could not read the steps from standard input: {e}"))?;
+                s
+            } else {
+                std::fs::read_to_string(v).map_err(|e| format!("could not read {v}: {e}"))?
+            };
+            let steps: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| format!("the steps are not JSON: {e}"))?;
+            let steps = if steps.is_object() && steps["steps"].is_array() { steps["steps"].clone() } else { steps };
+            if !steps.is_array() {
+                return Err("the steps must be a JSON list (or {\"steps\": [...]})".into());
+            }
+            cmd.insert("steps".into(), steps);
+            continue;
         }
         let value = if NUMBER_KEYS.contains(&k) {
             json!(v.parse::<i64>().map_err(|_| format!("{k} must be a whole number, not '{v}'"))?)

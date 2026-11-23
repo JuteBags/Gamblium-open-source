@@ -6,7 +6,7 @@
 import { $, send, el, td, pill, button, whileVisible } from './page.js';
 import {
   fmtMb, fmtPct, fmtDelay, siteLabel, stateOf, countStates, statesLine, tabPill, sortTabs, meterPct, weightOf, freeLevel, cpuLevel, WEIGHT_MB, kindRows, reasonRows,
-  filterTabs, mapBlocks, groupByWindow, GROUP_COLOURS,
+  filterTabs, mapBlocks, groupByWindow, GROUP_COLOURS, sleepSaid,
 } from './pages-logic.js';
 import { splitGroupIcon, GROUP_ICONS } from '../tabstats.js';
 
@@ -131,11 +131,12 @@ function tabRow(r, max) {
     go(r);
   });
   const where = [siteLabel(r.url)];
+  if (r.poppedOut) where.push('video popped out (its window is counted here)');
   if (r.shared) where.push('shares a process with other tabs');
   const mem = r.memoryMb === null ? '–' : el('span', { className: 'mem' }, [el('span', { className: 'meter' }, el('i', { style: `width:${meterPct(r.memoryMb, max)}%` })), el('span', { className: 'amount', textContent: fmtMb(r.memoryMb) })]);
   if (r.memoryMb !== null) mem.dataset.weight = weightOf(r.memoryMb);
   const acts = [];
-  if (r.state !== 'asleep' && !r.active) acts.push(button('Sleep', () => act(() => chrome.tabs.discard(r.tabId), 'Tab put to sleep.'), 'quiet'));
+  if (r.state !== 'asleep' && !r.active) acts.push(button('Sleep', () => sleepTabs([r.tabId]), 'quiet'));
   acts.push(button('Close', () => act(() => chrome.tabs.remove(r.tabId), 'Tab closed.'), 'danger'));
   const tr = el('tr', {}, [
     td(check, 'fit'),
@@ -302,6 +303,15 @@ async function go(r) {
   }
 }
 
+// Sleep goes through the extension, which looks at each tab first: one already asleep counts
+// as done instead of "Cannot discard tab with id: N".
+async function sleepTabs(ids) {
+  const r = await send({ type: 'sleep-tabs', tabIds: ids });
+  if (!r || r.ok === false) $('did').textContent = (r && r.error) || 'Could not put that to sleep.';
+  else $('did').textContent = sleepSaid(r);
+  refresh();
+}
+
 async function act(fn, done) {
   try {
     await fn();
@@ -348,7 +358,8 @@ $('clearPicked').addEventListener('click', () => {
 $('sleepPicked').addEventListener('click', () => {
   const ids = rows.filter((r) => picked.has(r.tabId) && r.state !== 'asleep' && !r.active).map((r) => r.tabId);
   picked.clear();
-  act(() => Promise.allSettled(ids.map((id) => chrome.tabs.discard(id))), ids.length ? `${plural(ids.length, 'tab')} put to sleep.` : 'Those tabs are showing or already asleep.');
+  if (ids.length) sleepTabs(ids);
+  else $('did').textContent = 'Those tabs are showing or already asleep.';
 });
 $('closePicked').addEventListener('click', () => {
   const ids = [...picked];

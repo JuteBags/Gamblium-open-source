@@ -320,6 +320,31 @@ export function findInSessions(store, query, perSession = 12) {
 }
 
 // Every saved page and the sessions it is in: { urlKey: [session names, newest first] }.
+/**
+ * The saved session the open tabs are (owner, Nov 15 2026: "Main Session" came back after a
+ * restart, the browser reopened its tabs, and Sessions offered to save them as a new one).
+ * A window's id changes when the browser starts again, so the tabs themselves are compared:
+ * the share of addresses the two have in common, against the larger of the two. The best at
+ * `min` or above wins (the newer on a tie); null when none is that close.
+ */
+export function matchSession(store, urls, min = 0.6) {
+  const open = new Set((urls || []).map(urlKey));
+  if (!open.size) return null;
+  let best = null;
+  for (const s of Object.values(store || {})) {
+    const saved = new Set((s.windows || []).flatMap((w) => (w.tabs || []).map((t) => urlKey(t.url))));
+    if (!saved.size) continue;
+    let same = 0;
+    for (const k of open) if (saved.has(k)) same++;
+    const score = same / Math.max(open.size, saved.size);
+    if (score < min) continue;
+    if (!best || score > best.score || (score === best.score && (s.savedAt || 0) > best.savedAt)) {
+      best = { name: s.name, score: Math.round(score * 100) / 100, same, open: open.size, saved: saved.size, savedAt: s.savedAt || 0 };
+    }
+  }
+  return best;
+}
+
 export function sessionsByUrl(store) {
   const map = {};
   for (const s of Object.values(store || {}).sort((a, b) => b.savedAt - a.savedAt)) {

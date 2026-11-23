@@ -1,6 +1,7 @@
 mod agentlog;
 mod audit;
 mod capture;
+mod codestamp;
 mod bring;
 mod dl;
 mod host;
@@ -71,9 +72,10 @@ enum Cmd {
         dry_run: bool,
     },
     /// Start a magnet link or a .torrent file in Gamblium's downloader and
-    /// show the Downloads page. Windows runs this for clicked magnet links.
+    /// show the Downloads page, or show a PDF file in Gamblium PDF. Windows
+    /// runs this for clicked magnet links and PDFs opened with Gamblium.
     Open {
-        /// A magnet link, or the address or path of a .torrent file.
+        /// A magnet link, the address or path of a .torrent file, or a PDF file.
         address: String,
     },
     /// Named browser sessions that work with no window. This is what the
@@ -119,6 +121,20 @@ enum Cmd {
         /// Start Gamblium after installing.
         #[arg(long)]
         start: bool,
+    },
+    /// Packs the owner's own Gamblium profile while it is closed (pack.rs), small on disk until
+    /// it starts again. Started in the background by the helper; does nothing while it runs.
+    #[command(hide = true)]
+    PackOwn,
+    /// Packs or unpacks one profile folder (for checks on a copy). Refuses a folder in use.
+    #[command(hide = true)]
+    PackDir {
+        dir: PathBuf,
+        #[arg(long)]
+        unpack: bool,
+        /// At idle CPU priority, as after a session closes.
+        #[arg(long)]
+        background: bool,
     },
     #[command(hide = true)]
     Relaunch {
@@ -325,6 +341,10 @@ struct LaunchArgs {
     /// (any presets/theme-<name>.json).
     #[arg(long)]
     theme: Option<String>,
+    /// With --theme: colour the browser through the profile's own settings only, without the
+    /// theme add-on (a new profile then shows no "Installed theme ... Undo" bar).
+    #[arg(long)]
+    no_theme_extension: bool,
     /// Make every website dark, including sites that only have a light design.
     /// The browser recolours pages itself; no extension or page script is involved.
     #[arg(long)]
@@ -359,6 +379,10 @@ struct LaunchArgs {
     /// Show what would change and the command line, but do nothing.
     #[arg(long)]
     dry_run: bool,
+    /// Do every one-time step of a start (settings, private windows, new extension code) and stop
+    /// before the window opens: a profile made ready ahead, so its real start is quick.
+    #[arg(long)]
+    prepare_only: bool,
     /// Extra switches passed to Brave unchanged (after `--`).
     #[arg(last = true)]
     extra: Vec<String>,
@@ -400,6 +424,22 @@ struct Report {
 
 const MB: f64 = 1024.0 * 1024.0;
 
+/// A PDF file on this computer (Explorer's "Open with Gamblium" passes its path).
+fn pdf_file(address: &str) -> Option<std::path::PathBuf> {
+    let p = std::path::Path::new(address.trim_matches('"'));
+    let pdf = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+    (pdf && p.is_file()).then(|| std::fs::canonicalize(p).map(|c| plain_path(&c)).unwrap_or_else(|_| p.to_path_buf()))
+}
+
+/// `canonicalize` gives `\\?\C:\...`; a file address wants `C:\...`.
+fn plain_path(p: &std::path::Path) -> std::path::PathBuf {
+    let s = p.to_string_lossy();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC\\") => std::path::PathBuf::from(rest),
+        _ => p.to_path_buf(),
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli.cmd {
@@ -416,6 +456,27 @@ fn main() {
             }
         }
         Cmd::Open { address } => {
+            if let Some(file) = pdf_file(&address) {
+                // The file's address; the extension sends a file:// PDF to Gamblium PDF.
+                let Ok(url) = url::Url::from_file_path(&file) else {
+                    eprintln!("error: '{address}' is not a file path");
+                    std::process::exit(2);
+                };
+                // In the neutral window, which belongs to no session (owner, Nov 16 2026); only if
+                // that cannot be made, in the owner's own Gamblium as before.
+                if let Err(e) = sessions::open_neutral(url.as_str()) {
+                    eprintln!("note: the neutral window could not open it ({e}); opening it in your own Gamblium");
+                    let me = std::env::current_exe().unwrap_or_default();
+                    let profile = install::profile_dir();
+                    let copy = rebrand::copy_dir().map(|d| d.join("brave.exe")).filter(|p| p.is_file());
+                    let running = profile.as_deref().map(|p| procs::browser_running("brave.exe", Some(p))).unwrap_or(false);
+                    let _ = match (running, copy, profile) {
+                        (true, Some(browser), Some(profile)) => launch::spawn_detached(&browser, &[format!("--user-data-dir={}", profile.display()), url.to_string()]),
+                        _ => launch::spawn_detached(&me.with_file_name("gamblium-app.exe"), &["--".to_owned(), url.to_string()]),
+                    };
+                }
+                return;
+            }
             if !dl::is_torrent(&address) {
                 eprintln!("error: '{address}' is not a magnet link or a .torrent file");
                 std::process::exit(2);
@@ -439,7 +500,9 @@ fn main() {
             let running = profile.as_deref().map(|p| procs::browser_running("brave.exe", Some(p))).unwrap_or(false);
             let _ = match (running, copy, profile) {
                 (true, Some(browser), Some(profile)) => launch::spawn_detached(&browser, &[format!("--user-data-dir={}", profile.display()), page]),
-                _ => launch::spawn_detached(&me.with_file_name("gamblium-app.exe"), &[]),
+                // Closed: the owner's own Gamblium with the Downloads page (with nothing, the starter
+                // opens a No session window; review 2, 1.23).
+                _ => launch::spawn_detached(&me.with_file_name("gamblium-app.exe"), &["--".to_owned(), page]),
             };
         }
         Cmd::Install { remove, new, dry_run } => {
@@ -519,7 +582,9 @@ fn main() {
                 }
             } else if apply_if_ready {
                 // Exit 0: the update is being installed (and will start Gamblium); 3: nothing to do.
-                let open = install::profile_dir().is_some_and(|p| procs::browser_running("brave.exe", Some(&p)));
+                // Only when no Gamblium browser runs at all: a session's window (Work) was closed
+                // for the update without asking (review 2, P0 1.3).
+                let open = install::profile_dir().is_some_and(|p| procs::browser_running("brave.exe", Some(&p))) || update::any_gamblium_browser();
                 match update::ready_installer(current) {
                     Some(installer) if !open => match update::start_apply(&installer, true) {
                         Ok(()) => println!("installing the update; Gamblium starts when it is done"),
@@ -544,37 +609,164 @@ fn main() {
                 println!("{}", serde_json::json!({ "current": current, "update": update::state() }));
             }
         }
-        Cmd::Relaunch { pid, user_data_dir } => {
-            // Let the helper's answer reach the page first.
-            std::thread::sleep(std::time::Duration::from_millis(700));
-            // A named session is closed its own way (tabs noted); its next command starts it again.
-            let sessions = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Gamblium").join("sessions"));
-            if let (Some(root), Some(name)) = (sessions, user_data_dir.file_name()) {
-                if user_data_dir.parent().is_some_and(|p| crate::dl::profile_key(p) == crate::dl::profile_key(&root)) {
-                    let _ = crate::sessions::command(&["close".to_owned(), name.to_string_lossy().into_owned()]);
+        Cmd::PackDir { dir, unpack, background } => {
+            // After a close: a moment first, so a session opened again at once is seen starting
+            // (its lockfile) and left alone (review 2, 1.7).
+            if background && !unpack {
+                if !crate::pack::nap(10) {
+                    return;
+                }
+                // Still held (closing slowly, or opened again): looked at again for 5 minutes, then
+                // left for the next close (review 2, 1.12).
+                let t = std::time::Instant::now();
+                while crate::pack::in_use(&dir) || procs::browser_running("brave.exe", Some(&dir)) {
+                    if t.elapsed() > Duration::from_secs(300) || !crate::pack::nap(15) {
+                        return;
+                    }
+                }
+                if crate::pack::is_packed(&dir) || crate::pack::updating() {
                     return;
                 }
             }
-            close_browser(pid, &user_data_dir);
-            for _ in 0..40 {
-                if !procs::browser_running("brave.exe", Some(&user_data_dir)) {
-                    break;
+            #[cfg(windows)]
+            if background {
+                unsafe {
+                    use windows_sys::Win32::System::Threading::{GetCurrentProcess, SetPriorityClass, IDLE_PRIORITY_CLASS};
+                    SetPriorityClass(GetCurrentProcess(), IDLE_PRIORITY_CLASS);
                 }
+            }
+            if procs::browser_running("brave.exe", Some(&dir)) || crate::pack::in_use(&dir) {
+                eprintln!("error: a browser has {} open", dir.display());
+                std::process::exit(1);
+            }
+            let t = std::time::Instant::now();
+            let r = if unpack { crate::pack::wait_unpacked(&dir).map(|b| format!("unpacked: {b}")) } else { crate::pack::pack_locked(&dir, || true).map(|b| format!("packed: {b}")) };
+            match r {
+                Ok(m) => println!("{m} in {:.1} s, now {} MB", t.elapsed().as_secs_f32(), crate::pack::size_of(&dir) / 1_048_576),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Cmd::PackOwn => {
+            // Idle CPU priority: packing yields the processor to what the person does (disk priority is not lowered).
+            #[cfg(windows)]
+            unsafe {
+                use windows_sys::Win32::System::Threading::{GetCurrentProcess, SetPriorityClass, IDLE_PRIORITY_CLASS};
+                SetPriorityClass(GetCurrentProcess(), IDLE_PRIORITY_CLASS);
+            }
+            let Some(own) = install::profile_dir() else { return };
+            if crate::pack::updating() {
+                return;
+            }
+            let closed = || {
+                !procs::browser_running("brave.exe", Some(&own))
+                    && crate::sessions::closed_at(&own).is_some_and(|t| crate::sessions::now_ms().saturating_sub(t) > 120_000)
+            };
+            if !closed() {
+                return;
+            }
+            let before = crate::pack::size_of(&own);
+            match crate::pack::pack_locked(&own, closed) {
+                Ok(true) => launch::relaunch_log(&format!("pack-own: {} MB -> {} MB", before / 1_048_576, crate::pack::size_of(&own) / 1_048_576)),
+                Ok(false) => {}
+                Err(e) => launch::relaunch_log(&format!("pack-own: not packed: {e}")),
+            }
+        }
+        Cmd::Relaunch { pid, user_data_dir } => {
+            // Out of the browser's process tree first: a forced close of a session's browser takes
+            // its whole tree (taskkill /T), and this program descends from it through the helper.
+            // A copy started by this one, which then ends at once, belongs to no tree of the
+            // browser's (its parent is gone), so it lives to start the browser again.
+            if std::env::var_os("GAMBLIUM_RELAUNCH_FREE").is_none() {
+                std::env::set_var("GAMBLIUM_RELAUNCH_FREE", "1");
+                let me = std::env::current_exe().unwrap_or_default();
+                let args = vec!["relaunch".to_owned(), "--pid".to_owned(), pid.to_string(), "--user-data-dir".to_owned(), user_data_dir.to_string_lossy().into_owned()];
+                if launch::spawn_outliving(&me, &args).is_ok() {
+                    return;
+                }
+            }
+            // This copy is free of the tree; the marker must not reach the browser it starts (its
+            // helpers would inherit it and skip the step next time).
+            std::env::remove_var("GAMBLIUM_RELAUNCH_FREE");
+            // Let the helper's answer reach the page first.
+            std::thread::sleep(std::time::Duration::from_millis(700));
+            // A named session is closed its own way (tabs noted) and, if it had a window, opened in
+            // one again (owner, Nov 16 2026: Work closed at an update and stayed closed).
+            let sessions = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Gamblium").join("sessions"));
+            if let (Some(root), Some(name)) = (sessions, user_data_dir.file_name()) {
+                if user_data_dir.parent().is_some_and(|p| crate::dl::profile_key(p) == crate::dl::profile_key(&root)) {
+                    let id = name.to_string_lossy().into_owned();
+                    let kind = crate::sessions::restart_kind(&user_data_dir);
+                    let _ = crate::sessions::command(&["close".to_owned(), id.clone(), if kind == "none" { "" } else { "--keep-unpacked" }.to_owned()]);
+                    if kind == "none" {
+                        launch::relaunch_log(&format!("relaunch {pid}: session {id} closed; its next command starts it"));
+                        return;
+                    }
+                    match crate::sessions::start_again(&id, kind) {
+                        Ok(()) if crate::sessions::restart_kind(&user_data_dir) != "none" => launch::relaunch_log(&format!("relaunch {pid}: session {id} back ({kind})")),
+                        Ok(()) => launch::relaunch_log(&format!("relaunch {pid}: session {id} was started but does not run")),
+                        Err(e) => launch::relaunch_log(&format!("relaunch {pid}: session {id} did not start again: {e}")),
+                    }
+                    return;
+                }
+            }
+            let log = |s: &str| launch::relaunch_log(&format!("relaunch {pid}: {s}"));
+            log(&format!("closing {}", user_data_dir.display()));
+            launch::stop_whole_browser(pid, &user_data_dir);
+            // A big profile (many tabs) can take a while to close. Starting again before it has
+            // gone hands the start to the closing browser, and then nothing is open at all
+            // (owner, Nov 15 2026). So: up to 60 s.
+            let t0 = std::time::Instant::now();
+            while procs::browser_running("brave.exe", Some(&user_data_dir)) && t0.elapsed() < std::time::Duration::from_secs(60) {
                 std::thread::sleep(std::time::Duration::from_millis(250));
             }
+            let still = procs::browser_running("brave.exe", Some(&user_data_dir));
+            log(&format!("closed after {:.1} s{}", t0.elapsed().as_secs_f32(), if still { " (STILL RUNNING)" } else { "" }));
             // Gamblium's own profile starts the way its shortcut does; any other
             // folder starts with the same options the shortcut would use.
             let me = std::env::current_exe().unwrap_or_default();
             let own = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Gamblium").join("User Data"));
             let starter = me.with_file_name("gamblium-app.exe");
-            let result = if own.as_deref() == Some(user_data_dir.as_path()) && starter.is_file() {
-                launch::spawn_detached(&starter, &[])
-            } else {
-                launch::spawn_detached(&me, &["launch".into(), "--theme".into(), "moon-dark".into(), "--auto-dark".into(), "--user-data-dir".into(), user_data_dir.to_string_lossy().into_owned()])
+            let is_own = own.as_deref().is_some_and(|o| crate::dl::profile_key(o) == crate::dl::profile_key(&user_data_dir));
+            let start = || {
+                // --main: the owner's own Gamblium itself. With nothing, the starter opens the way
+                // Settings says (a No session window), and Gamblium never came back (Nov 16 2026).
+                let same = |o: Option<PathBuf>| o.is_some_and(|o| crate::dl::profile_key(&o) == crate::dl::profile_key(&user_data_dir));
+                if is_own && starter.is_file() {
+                    launch::spawn_detached(&starter, &["--main".to_owned()])
+                } else if same(launch::agent_user_data_dir()) {
+                    // The agent profile: as an agent's browser again, with no window if it had none
+                    // (review 3, A12).
+                    let mut args = vec!["launch".to_owned(), "--agent".to_owned()];
+                    if launch::was_hidden(&user_data_dir) {
+                        args.push("--hidden".to_owned());
+                    }
+                    launch::spawn_detached(&me, &args)
+                } else if same(launch::pentest_user_data_dir()) {
+                    // The pen-test profile with its proxy: started again by the person, who chose it.
+                    launch::relaunch_log(&format!("relaunch {pid}: the pen-test profile is not started again by itself (its proxy and scope are chosen at start)"));
+                    Ok(())
+                } else {
+                    launch::spawn_detached(&me, &["launch".into(), "--theme".into(), "moon-dark".into(), "--auto-dark".into(), "--user-data-dir".into(), user_data_dir.to_string_lossy().into_owned()])
+                }
             };
-            if let Err(e) = result {
-                eprintln!("error: {e}");
-                std::process::exit(1);
+            // Started, then checked: if no browser runs on the profile 20 s later, once more.
+            for attempt in 1..=2 {
+                if let Err(e) = start() {
+                    log(&format!("start {attempt} failed: {e}"));
+                    continue;
+                }
+                let t1 = std::time::Instant::now();
+                while !procs::browser_running("brave.exe", Some(&user_data_dir)) && t1.elapsed() < std::time::Duration::from_secs(20) {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+                if procs::browser_running("brave.exe", Some(&user_data_dir)) {
+                    log(&format!("back after start {attempt} ({:.1} s)", t1.elapsed().as_secs_f32()));
+                    break;
+                }
+                log(&format!("start {attempt}: no browser after 20 s"));
             }
         }
         Cmd::Policies { remove } => match launch::remove_policies(!remove) {
@@ -767,6 +959,18 @@ fn main() {
 
 /// Sends one command to a running Gamblium and returns its answer.
 /// `file=<path>` is read and sent; `out=<path>` saves the answer to a file.
+/// `ctl_with` as Gamblium's own request (sessions.rs: the owner's Fork and Clone, after the
+/// terminal's own check in `cli_may`): a person's window answers it without asking.
+fn ctl_with_own(bridge: &host::BridgeInfo, op: &str, args: &[String], timeout: u64) -> Result<serde_json::Value, String> {
+    OWN_REQUEST.with(|o| o.set(true));
+    let r = ctl_with(bridge, op, args, timeout);
+    OWN_REQUEST.with(|o| o.set(false));
+    r
+}
+thread_local! {
+    static OWN_REQUEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 fn ctl_with(bridge: &host::BridgeInfo, op: &str, args: &[String], timeout: u64) -> Result<serde_json::Value, String> {
     let mut cmd = host::parse_ctl_args(op, args)?;
     // file=<path>: read a checkpoint from disk and send its content.
@@ -774,7 +978,7 @@ fn ctl_with(bridge: &host::BridgeInfo, op: &str, args: &[String], timeout: u64) 
         let text = std::fs::read_to_string(&file).map_err(|e| format!("{file}: {e}"))?;
         cmd["session"] = serde_json::from_str(&text).map_err(|e| format!("{file} is not JSON: {e}"))?;
     }
-    let mut answer = host::ctl(bridge, &cmd, timeout * 1000)?;
+    let mut answer = host::ctl_as(bridge, &cmd, timeout * 1000, OWN_REQUEST.with(|o| o.get()))?;
     // out=<path>: save the result to a file instead of printing it all.
     if let Some(out) = cmd["out"].as_str() {
         if let Some(parts) = answer["parts"].as_array() {
@@ -811,26 +1015,9 @@ fn ctl_with(bridge: &host::BridgeInfo, op: &str, args: &[String], timeout: u64) 
 /// Asks Brave to close its windows; if it has not gone after a few seconds,
 /// stops it and marks the exit as clean so the next start does not restore tabs.
 fn close_browser(pid: u32, user_data_dir: &std::path::Path) {
-    let taskkill = |args: &[&str]| {
-        let _ = std::process::Command::new("taskkill").args(args).output();
-    };
-    let id = pid.to_string();
-    taskkill(&["/PID", &id]); // polite: the same as clicking the close button
-    for _ in 0..24 {
-        if !procs::is_running(pid) {
-            println!("closed {} (pid {pid})", user_data_dir.display());
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    taskkill(&["/T", "/F", "/PID", &id]);
-    std::thread::sleep(Duration::from_millis(500));
-    if let Err(e) = launch::mark_clean_exit(user_data_dir) {
-        eprintln!("could not mark a clean exit for {}: {e}", user_data_dir.display());
-    }
-    println!("stopped {} (pid {pid}); it did not close by itself", user_data_dir.display());
+    launch::stop_whole_browser(pid, user_data_dir);
+    println!("closed {} (pid {pid})", user_data_dir.display());
 }
-
 fn load_scope(scope_file: &Option<PathBuf>) -> Result<Vec<scan::ScopeEntry>, String> {
     match scope_file {
         Some(f) => Ok(scan::parse_scope(
@@ -1027,6 +1214,64 @@ fn run_launch(mut a: LaunchArgs) -> Result<(), String> {
     } else {
         None
     };
+    // A closed profile is kept packed (pack.rs): unpacked here, before anything reads it, after a
+    // pack at work has finished.
+    // A person's session (Work) is their window: never an agent's browser, never unseen, from any
+    // caller (review 5, C4: `gamblium launch --agent --hidden --user-data-dir <Work>`).
+    let mut guarded = false;
+    // A browser has one profile folder: the launcher's own --user-data-dir. One given again after
+    // `--` (any case) is refused for every start: Chromium keeps the last, so it chose the folder
+    // past every check (review 8, F2).
+    if a.extra.iter().any(|x| x.trim_start_matches(['-', '/']).split('=').next().unwrap_or("").eq_ignore_ascii_case("user-data-dir")) {
+        return Err("give the profile folder with --user-data-dir before `--`, once".into());
+    }
+    if let Some(f) = &folder {
+        // Nor with a debugging port or a TLS key log: either reads every sign-in (review 6, D5).
+        // Switches by name, any case; a second --user-data-dir or headless after `--` too (Chromium
+        // keeps the last one; review 7, E1). The owner's own Gamblium (Personal) is guarded the same.
+        let switch = |x: &String| x.trim_start_matches(['-', '/']).split('=').next().unwrap_or("").to_ascii_lowercase();
+        let debugger = a.debug_port.is_some()
+            || a.tls_keylog.is_some()
+            || a.extra.iter().map(switch).any(|s| ["remote-debugging-port", "remote-debugging-pipe", "ssl-key-log-file", "user-data-dir", "headless", "load-extension", "log-net-log"].contains(&s.as_str()));
+        // Compared as real paths (`app\..\User Data`, short names; review 8, F3).
+        let real = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let owners = crate::install::profile_dir().is_some_and(|m| crate::dl::profile_key(&real(&m)) == crate::dl::profile_key(&real(f)));
+        guarded = owners || crate::sessions::person_folder(f) || crate::sessions::person_by_content(&real(f));
+        if owners && !a.dry_run {
+            let _ = std::fs::write(f.join(crate::sessions::OWNER_MARK), "This is the owner's own Gamblium profile: never an agent's.\n");
+        }
+        if (a.agent || a.hidden || debugger) && guarded {
+            return Err("that folder is a person's session: it starts only as their own window".into());
+        }
+        if guarded {
+            // A proxy only as the person set it for that session (its note), and no preset file:
+            // either could send its traffic through a reader's proxy or add switches unchecked
+            // (review 8, F4).
+            let theirs = crate::sessions::note_proxy(f);
+            if a.proxy.as_deref().is_some_and(|p| Some(p) != theirs.as_deref()) {
+                return Err("that folder is a person's own profile: its proxy is set by them, on the Sessions page".into());
+            }
+            if !a.preset_file.is_empty() {
+                return Err("that folder is a person's own profile: preset files are not applied to it".into());
+            }
+            if a.extra.iter().map(switch).any(|s| s.starts_with("ignore-certificate-errors")) {
+                return Err("that folder is a person's own profile: certificate checks stay on".into());
+            }
+            // After `--` only what a window needs: addresses and files, and the window's place and
+            // size. A deny-list always missed one (review 10, H6: --auth-server-allowlist=* gave the
+            // Windows sign-in to any site, --host-rules, --disable-web-security; review 9, G12/G13).
+            const WINDOW_ONLY: [&str; 7] = ["start-maximized", "start-fullscreen", "window-size", "window-position", "new-window", "incognito", "single-argument"];
+            if let Some(bad) = a.extra.iter().find(|x| (x.starts_with('-') || x.starts_with('/')) && !WINDOW_ONLY.contains(&switch(x).as_str())) {
+                return Err(format!("that folder is a person's own profile: the switch {bad} is not passed to it (only addresses, files and the window's place and size are)"));
+            }
+        }
+    }
+    if let Some(f) = &folder {
+        crate::pack::mark_launching(f);
+        if crate::pack::wait_unpacked(f).map_err(|e| format!("could not unpack the profile: {e}"))? {
+            eprintln!("note: the profile was packed while closed; unpacked");
+        }
+    }
     rebrand::look_belongs_to(folder.as_deref());
     // Started from a shortcut: the theme chosen on the welcome page or in
     // Settings wins over the shortcut's default, if its preset still exists.
@@ -1100,6 +1345,15 @@ fn run_launch(mut a: LaunchArgs) -> Result<(), String> {
         a.user_data_dir
     };
     let new_folder = custom_dir.as_deref().is_some_and(launch::is_new_profile_folder);
+    if new_folder && !dry_run {
+        if let Some(dir) = custom_dir.as_deref() {
+            let _ = std::fs::create_dir_all(dir);
+            let n = launch::seed_ad_block(dir);
+            if n > 0 {
+                println!("ad blocking: {n} filter lists ready from the first page");
+            }
+        }
+    }
 
     // Layers, later ones win: built-in preset, debloat, new-profile defaults,
     // theme, then the caller's own preset files.
@@ -1140,7 +1394,7 @@ fn run_launch(mut a: LaunchArgs) -> Result<(), String> {
             if f.is_file() {
                 overlay(&mut preset, &f)?;
             }
-            if has_extension {
+            if has_extension && !a.no_theme_extension {
                 preset.args.push(format!("--load-extension={}", dir.display()));
             }
         }
@@ -1195,6 +1449,12 @@ fn run_launch(mut a: LaunchArgs) -> Result<(), String> {
         // ask for permission to change settings but can never give it.
         if let Some(folder) = &folder {
             let _ = std::fs::create_dir_all(folder).and_then(|_| std::fs::write(folder.join(launch::AGENT_MARKER), "This profile is driven by agents.\n"));
+        }
+    } else if guarded && !dry_run {
+        // A person's own profile started as their window: a marker left by an earlier hidden start
+        // made the helper treat it as an agent's browser for good (review 5, C5).
+        if let Some(folder) = &folder {
+            let _ = std::fs::remove_file(folder.join(launch::AGENT_MARKER));
         }
     }
     if a.agent {
@@ -1259,11 +1519,17 @@ fn run_launch(mut a: LaunchArgs) -> Result<(), String> {
         // front (it stole the owner's screen during test runs).
         let welcome = !(a.skip_welcome || debug_port.is_some() || a.agent || a.pentest);
         if !dry_run && (a.theme.is_some() || extension_freezes || !welcome || prefs_dir.join(launch::LAUNCH_INFO_FILE).exists()) {
-            launch::write_launch_info(&prefs_dir, a.theme.as_deref(), extension_freezes, welcome).map_err(|e| format!("launch note: {e}"))?;
+            let seen = !(debug_port.is_some() || a.agent || a.pentest || a.hidden);
+            launch::write_launch_info(&prefs_dir, a.theme.as_deref(), extension_freezes, welcome, seen).map_err(|e| format!("launch note: {e}"))?;
         }
         let force_dark = preset.args.iter().any(|x| x.contains("WebContentsForceDark"));
         if !dry_run && (force_dark || prefs_dir.join(launch::LAUNCH_INFO_FILE).exists()) {
             launch::note_force_dark(&prefs_dir, force_dark).map_err(|e| format!("launch note: {e}"))?;
+        }
+        if !dry_run {
+            // GAMBLIUM_PDF_BY_EXTENSION: tests that drive the extension's own PDF tab (tools/pdf-check.mjs).
+            launch::note_builtin_pdf(&prefs_dir, rebrand::has_builtin_pdf(&brave) && std::env::var_os("GAMBLIUM_PDF_BY_EXTENSION").is_none()).map_err(|e| format!("launch note: {e}"))?;
+            let _ = launch::note_hidden(&prefs_dir, a.hidden);
         }
         let changed = launch::apply_local_state(&prefs_dir, &preset.local_state, dry_run)
             .map_err(|e| format!("Local State: {e}"))?;
@@ -1324,6 +1590,29 @@ fn run_launch(mut a: LaunchArgs) -> Result<(), String> {
     }
     let mut args =
         launch::build_args(custom_dir.as_deref(), profile_directory.as_deref(), debug_port, &preset, &extra);
+    // One profile folder, the launcher's own, for EVERY start: a preset file's args (or the
+    // presets under GAMBLIUM_HOME) could add a second one, which Chromium takes (review 9, G1).
+    {
+        let udd = args.iter().filter(|x| x.trim_start_matches(['-', '/']).split('=').next().unwrap_or("").eq_ignore_ascii_case("user-data-dir")).count();
+        // None but the launcher's own: a start with no folder of its own took one from a preset
+        // and skipped every person check (review 10, H1).
+        let allowed = usize::from(custom_dir.is_some());
+        if udd > allowed {
+            return Err("a preset gives a --user-data-dir: a browser starts on one profile folder, the one given to the launcher".into());
+        }
+    }
+    // The final switches too, for Work and Personal: a preset file's args and the inherited
+    // SSLKEYLOGFILE reach the browser without passing the gate above (review 7, E1).
+    if guarded {
+        let name = |x: &String| x.trim_start_matches(['-', '/']).split('=').next().unwrap_or("").to_ascii_lowercase();
+        let names: Vec<String> = args.iter().map(name).collect();
+        let bad = names.iter().filter(|n| *n == "user-data-dir").count() > 1
+            || names.iter().any(|n| ["remote-debugging-port", "remote-debugging-pipe", "ssl-key-log-file", "headless", "log-net-log"].contains(&n.as_str()));
+        if bad {
+            return Err("that folder is a person's own profile: it starts only as their own window, with no debugger, key log or second profile".into());
+        }
+        std::env::remove_var("SSLKEYLOGFILE");
+    }
     // A new profile's first window fills the screen (owner, Nov 14 2026: it opened small). The
     // browser remembers the size afterwards, so later starts are the person's own choice. Not for
     // test, agent, pen-test or hidden starts.
@@ -1335,15 +1624,47 @@ fn run_launch(mut a: LaunchArgs) -> Result<(), String> {
     if dry_run {
         return Ok(());
     }
+    // A folder with no saved tabs yet keeps none from the hidden starts below (owner, Nov 20 2026:
+    // No session windows opened on about:blank, the hidden start's page, instead of New Tab).
+    let saved_tabs = |d: &std::path::Path| ["Sessions", "Sessions_Encrypted"].iter().any(|n| d.join("Default").join(n).is_dir());
+    let had_saved_tabs = saved_tabs(&prefs_dir);
     // Once per profile: let our extension work in private and Tor windows too.
     let loads_extension = args.iter().any(|x| x.starts_with("--load-extension="));
     if loads_extension && !running && !a.hidden && !a.agent && private::failed_before(&prefs_dir, host::EXTENSION_ID) {
         println!("private windows: not tried again (it failed before; delete gamblium-private-access.failed in the profile folder to retry)");
     } else if loads_extension && !running && !a.hidden && !a.agent && !private::already_done(&prefs_dir, host::EXTENSION_ID) {
-        match private::allow(&brave, &prefs_dir, &args, host::EXTENSION_ID) {
+        // The hidden start must not leave its invisible window as the profile's last one.
+        let placement = launch::window_placement(&prefs_dir);
+        let allowed = private::allow(&brave, &prefs_dir, &args, host::EXTENSION_ID);
+        launch::put_back_window_placement(&prefs_dir, placement);
+        match allowed {
             Ok(()) => println!("private windows: the Gamblium extension is now allowed in private and Tor windows"),
             Err(e) => println!("private windows: could not switch the extension on there ({e}); it can be done by hand under Extensions > Gamblium > Allow in Private"),
         }
+    }
+    // New extension code since this profile last ran (an install while it was closed): taken in a
+    // hidden start first, so the window opens on it instead of closing itself once or twice.
+    if loads_extension && !running {
+        let ext = args.iter().find_map(|x| x.strip_prefix("--load-extension=")).into_iter().flat_map(|l| l.split(',')).map(PathBuf::from).find(|d| d.join("code-stamp.js").is_file());
+        if let Some(stamp) = ext.as_deref().and_then(codestamp::installed_stamp) {
+            if !had_saved_tabs && !prefs_dir.join(codestamp::RUNNING).is_file() {
+                // A new profile loads the extension for the first time: it is the current code.
+                let _ = std::fs::write(prefs_dir.join(codestamp::RUNNING), &stamp);
+            } else if codestamp::wanted(&prefs_dir, &stamp) {
+                let placement = launch::window_placement(&prefs_dir);
+                println!("{}", codestamp::refresh(&brave, &prefs_dir, &args, &stamp));
+                launch::put_back_window_placement(&prefs_dir, placement);
+            }
+        }
+    }
+    if !had_saved_tabs {
+        for n in ["Sessions", "Sessions_Encrypted"] {
+            let _ = std::fs::remove_dir_all(prefs_dir.join("Default").join(n));
+        }
+    }
+    if a.prepare_only {
+        println!("prepared: the profile's one-time steps are done; no window opened");
+        return Ok(());
     }
     launch::spawn_detached(&brave, &args).map_err(|e| format!("could not start Brave: {e}"))?;
     Ok(())

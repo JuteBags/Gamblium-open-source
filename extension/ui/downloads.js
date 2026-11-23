@@ -8,6 +8,9 @@ import { fmtAgo, downloadView, anyInProgress, rulesFromRows, DOWNLOAD_ACTION_NAM
 // ---- The list -------------------------------------------------------------------
 
 let list = [];
+// Rows on their way out, waiting out their Undo: 'b:<id>' for the browser's rows, the job id for ours.
+const UNDO_MS = 6000;
+const leaving = new Map(); // key -> { action, timer, run? }
 const filter = { kind: 'all', when: 'all', query: '' };
 
 // The filters: a word, when, and what kind of file. Each kind shows how many files it holds.
@@ -30,7 +33,7 @@ function renderFilters() {
 }
 
 function render() {
-  const shown = filterDownloads(list, filter);
+  const shown = filterDownloads(list, filter).filter((d) => !leaving.has('b:' + d.id));
   $('none').hidden = list.length > 0;
   // Nothing to filter yet: no search box and no date or kind chips.
   $('dq').parentElement.hidden = list.length === 0; // the search box and the date chips share one row
@@ -197,8 +200,6 @@ async function readJobs() {
 }
 
 // Cancel and Remove wait a few seconds with an Undo, instead of acting on the first click.
-const UNDO_MS = 6000;
-const leaving = new Map(); // job id -> { action, timer }
 async function jobAct(id, action) {
   if (ENDING.has(action) && !leaving.has(id)) {
     const j = jobs.find((x) => x.id === id);
@@ -232,7 +233,7 @@ function hideToast() {
   if (t) { delete t.dataset.on; t.hidden = true; }
 }
 // Leaving the page while an Undo is open: what was asked is done, not lost.
-addEventListener('pagehide', () => { for (const [id, l] of leaving) { clearTimeout(l.timer); jobDo(id, l.action); } leaving.clear(); });
+addEventListener('pagehide', () => { for (const [id, l] of leaving) { clearTimeout(l.timer); l.run ? l.run() : jobDo(id, l.action); } leaving.clear(); });
 
 async function jobDo(id, action) {
   if (demo) {
@@ -297,7 +298,26 @@ const refresh = whileVisible(async () => {
   await Promise.all([read(), readJobs()]);
 }, 1000, () => anyInProgress(list) || (!demo && dlActive(jobs)));
 
+// The browser's own rows take the same Undo as the downloader's (interaction spec, rule 5):
+// Cancel and Remove from list leave the list at once and act after a few seconds.
 async function act(id, action) {
+  const key = 'b:' + id;
+  if (['cancel', 'erase'].includes(action) && !leaving.has(key)) {
+    const d = list.find((x) => x.id === id);
+    const name = baseName(d?.filename) || d?.url || 'The download';
+    const timer = setTimeout(() => { leaving.delete(key); hideToast(); actNow(id, action); }, UNDO_MS);
+    leaving.set(key, { action, timer, run: () => actNow(id, action) });
+    showToast(`${action === 'cancel' ? 'Cancelled' : 'Removed'} ${name}.`, () => {
+      clearTimeout(leaving.get(key)?.timer);
+      leaving.delete(key);
+      render();
+    });
+    document.activeElement?.blur();
+    return render();
+  }
+  return actNow(id, action);
+}
+async function actNow(id, action) {
   const r = await send({ type: 'downloads-action', id, action });
   if (r.ok === false) say($('said'), 'bad', r.error);
   else say($('said'), '', '');

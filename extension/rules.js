@@ -54,6 +54,16 @@ export const DEFAULTS = {
 
 export const MAX_TEMP = 273;
 
+// A tab the freezer and the sleeper look after: a web page, or a PDF in Gamblium PDF (a PDF file
+// shown by the browser's built-in page, or our viewer's own tab). Its edits survive sleep: the
+// viewer keeps them as a draft (pdf/viewer.js).
+export function isPageTab(url) {
+  const u = String(url || "");
+  if (/^https?:/.test(u)) return true;
+  if (/^file:\/\/\/.*\.pdf$/i.test(u.split(/[?#]/)[0])) return true;
+  return /^chrome-extension:\/\/[a-p]{32}\/pdf\/viewer\.html\?(src|file)=/.test(u);
+}
+
 // What a level means in practice.
 //   { freeze: false }                              273 K
 //   { freeze: true, wakeEveryMin: null }           0 K
@@ -113,9 +123,11 @@ export function keepReason(tab, settings, now, ctx = {}) {
   if (tab.discarded) return "already asleep";
   if (tab.active) return "visible";
   if (tab.audible) return "playing audio";
+  // Its video is in Gamblium's pop-out window, paused or muted too (review 10, H7).
+  if ((ctx.pipTabs || []).includes(tab.id)) return "video popped out";
   if (tab.pinned) return "pinned";
   if (tab.autoDiscardable === false) return "marked never sleep";
-  if (!/^https?:/.test(tab.url || "")) return "not a web page";
+  if (!isPageTab(tab.url)) return "not a web page";
   if (tempOf(tab, settings, ctx) >= MAX_TEMP) return "kept awake";
   if (isAllowlisted(tab.url, settings.allowlist)) return "allowlisted";
   // Work the user is waiting for is never thrown away, however short memory
@@ -192,7 +204,8 @@ export function freezeReason(tab, settings, now, ctx = {}) {
   if (tab.frozen) return "already frozen";
   if (tab.active) return "visible";
   if (tab.audible) return "playing audio";
-  if (!/^https?:/.test(tab.url || "")) return "not a web page";
+  if ((ctx.pipTabs || []).includes(tab.id)) return "video popped out";
+  if (!isPageTab(tab.url)) return "not a web page";
   // A page still loading is left to load for up to a minute, unless its
   // document is in (DOMContentLoaded, ctx.domReady): then only late extras
   // (adverts, trackers, pictures further down) are left, and it is frozen on
@@ -231,7 +244,7 @@ export function nextFreezeDue(tabs, settings, now, ctx = {}) {
   if (!settings.freezeEnabled) return null;
   let next = null;
   for (const t of tabs) {
-    if (t.active || t.discarded || t.audible || (ctx.frozen && ctx.frozen[t.id]) || !/^https?:/.test(t.url || "")) continue;
+    if (t.active || t.discarded || t.audible || (ctx.frozen && ctx.frozen[t.id]) || !isPageTab(t.url)) continue;
     if (tempOf(t, settings, ctx) >= MAX_TEMP || isAllowlisted(t.url, settings.allowlist)) continue;
     const since = t.lastAccessed ?? ctx.firstSeen?.[t.id] ?? now;
     let due = since + settings.freezeDelaySec * 1000;

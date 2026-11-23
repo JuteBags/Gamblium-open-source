@@ -176,15 +176,33 @@ fn key(dir: &Path) -> Result<[u8; 32], String> {
 
 fn read_or_make(path: &Path) -> Result<[u8; 32], String> {
     let dir = path.parent().unwrap_or(Path::new("."));
-    if let Ok(wrapped) = fs::read(path) {
-        let raw = dpapi(&wrapped, false)?;
-        return raw.as_slice().try_into().map_err(|_| "the vault key is damaged".to_string());
+    let open = |wrapped: &[u8]| -> Result<[u8; 32], String> {
+        let raw = dpapi(wrapped, false)?;
+        raw.as_slice().try_into().map_err(|_| "the vault key is damaged".to_string())
+    };
+    match fs::read(path) {
+        Ok(wrapped) => return open(&wrapped),
+        // Only a key that is not there is made. Any other failure (a file in use, no access) is
+        // an error: replacing the key would make everything sealed with it unreadable.
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(format!("could not read the key {}: {e}", path.display())),
+        Err(_) => {}
     }
     let mut fresh = [0u8; 32];
     getrandom::getrandom(&mut fresh).map_err(|e| e.to_string())?;
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    fs::write(path, dpapi(&fresh, true)?).map_err(|e| e.to_string())?;
-    Ok(fresh)
+    let wrapped = dpapi(&fresh, true)?;
+    // Two helpers at first use: the first file wins and the other reads it.
+    // Written whole beside, then linked in place: the link fails if another helper got there
+    // first, and a crash never leaves an empty key file (review 2, 1.16).
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    fs::write(&tmp, &wrapped).map_err(|e| e.to_string())?;
+    let linked = fs::hard_link(&tmp, path);
+    let _ = fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => Ok(fresh),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => open(&fs::read(path).map_err(|e| e.to_string())?),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Stores the cookie for download `id`. Returns the moment it expires.

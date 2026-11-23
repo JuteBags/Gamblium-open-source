@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describeTemp, freezeReason, menuInkOfTheme, schemeOfTheme, tabsToFreeze, tabsToWake, tempOf, tempPlan } from "./rules.js";
+import { describeTemp, freezeReason, menuInkOfTheme, schemeOfTheme, tabsToFreeze, tabsToWake, tempOf, tempPlan, isPageTab } from "./rules.js";
 import { test } from "node:test";
 import { DEFAULTS, effectiveDelaySec, isAllowlisted, keepReason, lightSiteMatches, tabsToSleep } from "./rules.js";
 
@@ -17,6 +17,7 @@ test("a tab hidden longer than the delay may sleep", () => {
 test("each exemption keeps a tab awake", () => {
   assert.equal(keepReason(tab({ active: true }), s, now), "visible");
   assert.equal(keepReason(tab({ audible: true }), s, now), "playing audio");
+  assert.equal(keepReason(tab({ id: 7 }), s, now, { pipTabs: [7] }), "video popped out");
   assert.equal(keepReason(tab({ pinned: true }), s, now), "pinned");
   assert.equal(keepReason(tab({ discarded: true }), s, now), "already asleep");
   assert.equal(keepReason(tab({ autoDiscardable: false }), s, now), "marked never sleep");
@@ -75,6 +76,7 @@ test("a hidden tab freezes after the delay, with the exceptions the owner asked 
   assert.equal(freezeReason(hidden({ lastAccessed: now - 5000 }), s, now), "hidden only 5 s");
   assert.equal(freezeReason(hidden({ active: true }), s, now), "visible");
   assert.equal(freezeReason(hidden({ audible: true }), s, now), "playing audio");
+  assert.equal(freezeReason(hidden({}), s, now, { pipTabs: [1] }), "video popped out");
   assert.equal(freezeReason(hidden({ frozen: true }), s, now), "already frozen");
   assert.equal(freezeReason(hidden({ discarded: true }), s, now), "asleep");
   assert.equal(freezeReason(hidden({ status: "loading", lastAccessed: now - 40_000 }), s, now), "still loading");
@@ -252,4 +254,15 @@ test("a hidden tab waits for its turn when enough hidden tabs are loading alread
   for (const t of [tab({ active: true }), tab({ pinned: true }), tab({ audible: true }), tab({ discarded: true }), tab({ url: "chrome://newtab/" }), tab({ url: "https://dash.example/x" })]) assert.equal(holdForLoading(t, s, 9), false);
   assert.equal(holdForLoading(tab(), s, 9, true), false);
   assert.equal(holdForLoading(tab(), { ...s, loadAtOnce: 0 }, 9), false);
+});
+
+test("PDF tabs are looked after like pages: files, the built-in page, our viewer's tab", () => {
+  assert.equal(isPageTab("https://x.org/a.pdf"), true);
+  assert.equal(isPageTab("file:///C:/Users/a/Report%20one.PDF"), true);
+  assert.equal(isPageTab("file:///C:/Users/a/notes.txt"), false);
+  assert.equal(isPageTab("chrome-extension://pbgbdlkcienglhbfadbjolphinilbpia/pdf/viewer.html?file=file%3A%2F%2F%2FC%3A%2Fa.pdf"), true);
+  // Opened from the file picker: no address to load it again, so never put to sleep.
+  assert.equal(isPageTab("chrome-extension://pbgbdlkcienglhbfadbjolphinilbpia/pdf/viewer.html"), false);
+  assert.equal(isPageTab("chrome-extension://pbgbdlkcienglhbfadbjolphinilbpia/ui/settings.html"), false);
+  assert.equal(isPageTab("brave://settings"), false);
 });

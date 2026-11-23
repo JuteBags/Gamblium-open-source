@@ -167,7 +167,9 @@ pub fn install(home: &Path, dry_run: bool) -> Result<Vec<String>, String> {
         // The downloader is a separate program; an older build may not have it.
         let downloader = my_dir.join("gamblium-dl.exe");
         let cli = my_dir.join("gamblium-cli.exe");
-        for exe in [&me, &starter, &downloader, &cli] {
+        // The floating lyrics window (issue #242), started by the helper.
+        let lyrics = my_dir.join("gamblium-lyrics.exe");
+        for exe in [&me, &starter, &downloader, &cli, &lyrics] {
             if !exe.is_file() {
                 continue;
             }
@@ -187,14 +189,45 @@ pub fn install(home: &Path, dry_run: bool) -> Result<Vec<String>, String> {
         if dry_run {
             log.push(format!("would copy {dir}\\"));
         } else {
-            // Replace the old copy so files removed from the source do not linger.
-            if to.is_dir() {
-                fs::remove_dir_all(&to).map_err(io)?;
+            // Copied whole and stamped beside the old copy, then put in its place in one step: a
+            // running browser that looked in the middle of a copy saw the repository's "dev"
+            // stamp and half the files, and restarted into that (Nov 15 2026).
+            let staged = app.join(format!("{}.new", dir.replace('/', "-")));
+            if staged.is_dir() {
+                fs::remove_dir_all(&staged).map_err(io)?;
             }
-            log.push(format!("copied {dir}\\ ({} files)", copy_tree(&from, &to).map_err(io)?));
+            let files = copy_tree(&from, &staged).map_err(io)?;
             if dir == "extension" {
-                write_code_stamp(&to).map_err(io)?;
+                write_code_stamp(&staged).map_err(io)?;
             }
+            // Replace the old copy so files removed from the source do not linger: the old one is
+            // renamed aside first, the new one renamed in, and only then the old one deleted. A
+            // file held open (a running browser, a virus check) left it half-deleted before
+            // (review 2, 1.17); now the old copy stays whole or is put back.
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent).map_err(io)?;
+            }
+            let mut old = app.join(format!("{}.old", dir.replace('/', "-")));
+            if old.is_dir() && fs::remove_dir_all(&old).is_err() {
+                // A leftover still held open: this install sets its old copy aside under another name
+                // (review 9, G25: every later install failed).
+                old = app.join(format!("{}.old{}", dir.replace('/', "-"), std::process::id()));
+            }
+            let had_old = to.is_dir();
+            if had_old {
+                fs::rename(&to, &old).map_err(io)?;
+            }
+            if let Err(e) = fs::rename(&staged, &to) {
+                if had_old {
+                    let _ = fs::rename(&old, &to);
+                }
+                return Err(io(e));
+            }
+            if had_old {
+                // Files still open inside it stay until the next install; the new copy is in place.
+                let _ = fs::remove_dir_all(&old);
+            }
+            log.push(format!("copied {dir}\\ ({files} files)"));
         }
     }
     // The browser that came inside the package becomes Gamblium's own.
@@ -204,11 +237,19 @@ pub fn install(home: &Path, dry_run: bool) -> Result<Vec<String>, String> {
         if dry_run {
             log.push(format!("would copy the browser to {}", dest.display()));
         } else {
+            // Never under a running browser: deleting it half-way left a broken copy (review 2, 1.17).
+            if crate::update::any_gamblium_browser() {
+                return Err("a Gamblium browser is running from the browser folder: close every Gamblium window, then install again".into());
+            }
             if dest.is_dir() {
                 fs::remove_dir_all(&dest).map_err(|e| format!("{}: {e} (is Gamblium running?)", dest.display()))?;
             }
             let (files, bytes) = crate::rebrand::copy_all(&shipped, &dest).map_err(io)?;
             fs::write(dest.join(crate::rebrand::SHIPPED), "This browser came inside the Gamblium package.\n").map_err(io)?;
+            // A note left by an older local rebrand is not about this browser (review 9, G28).
+            if let Some(note) = crate::rebrand::incomplete_note() {
+                let _ = fs::remove_file(note);
+            }
             log.push(format!("browser: copied ({files} files, {} MB)", bytes / 1_048_576));
         }
     }
@@ -243,6 +284,11 @@ pub fn install(home: &Path, dry_run: bool) -> Result<Vec<String>, String> {
         log.push(take_magnet_links(&app.join("gamblium-app.exe"))?);
     }
     if dry_run {
+        log.push("would offer Gamblium for PDF files (Open with, and Settings > Default apps)".into());
+    } else {
+        log.push(offer_for_pdfs(&app.join("gamblium-app.exe"), &app.join("gamblium.ico")));
+    }
+    if dry_run {
         log.push("would put the install folder on your PATH, so `gamblium-cli` works in any terminal".into());
     } else {
         log.push(match on_path(&app, true) {
@@ -253,6 +299,21 @@ pub fn install(home: &Path, dry_run: bool) -> Result<Vec<String>, String> {
     }
     if let Some(profile) = profile_dir() {
         log.push(format!("Gamblium's own profile will live in {}", profile.display()));
+        // Marked as the owner's, so no start ever takes it for an agent's (review 9, G2).
+        if !dry_run && profile.is_dir() {
+            let _ = fs::write(profile.join(crate::sessions::OWNER_MARK), "This is the owner's own Gamblium profile: never an agent's.\n");
+        }
+    }
+    // Closed profiles take the new code now, in the background, and a spare No session window is
+    // made ready on it: the first click after an install opens as quickly as any other (owner,
+    // Nov 20 2026: Personal took 7 s to open after an install).
+    // The old spare No session window holds the previous code: thrown away (a new one is made after
+    // the next start). No hidden starts here (owner, Nov 20 2026: Defender quarantined gamblium.exe
+    // while a warm-up after install started several hidden browsers in a row).
+    if !dry_run {
+        if let Some(spare) = crate::sessions::spare_dir() {
+            let _ = fs::remove_dir_all(spare);
+        }
     }
     Ok(log)
 }
@@ -350,13 +411,96 @@ fn give_back_magnet_links() -> String {
     let command_key = format!(r"{MAGNET_KEY}\shell\open\command");
     let before = magnet_before_file().and_then(|f| fs::read_to_string(f).ok()).filter(|c| !c.trim().is_empty());
     let done = match &before {
-        Some(cmd) => reg(&["add", &command_key, "/ve", "/t", "REG_SZ", "/d", cmd.trim(), "/f"]).map(|_| format!("magnet links given back to: {}", cmd.trim())),
-        None => reg(&["delete", MAGNET_KEY, "/f"]).map(|_| "magnet links are no longer Gamblium's".to_owned()),
+        // Given back only while magnet links are still Gamblium's (review 9, G26).
+        Some(cmd) => match reg(&["query", &command_key, "/ve"]) {
+            Ok(now) if !now.to_ascii_lowercase().contains("gamblium") => Ok("magnet links belong to another program now: left as they are".to_owned()),
+            _ => reg(&["add", &command_key, "/ve", "/t", "REG_SZ", "/d", cmd.trim(), "/f"]).map(|_| format!("magnet links given back to: {}", cmd.trim())),
+        },
+        // Deleted only while it is still ours: another program may have taken magnet links since
+        // (review 2, 1.18).
+        None => match reg(&["query", &command_key, "/ve"]) {
+            Ok(now) if now.to_ascii_lowercase().contains("gamblium") => reg(&["delete", MAGNET_KEY, "/f"]).map(|_| "magnet links are no longer Gamblium's".to_owned()),
+            Ok(_) => Ok("magnet links belong to another program now: left as they are".to_owned()),
+            Err(_) => Ok("magnet links: nothing of Gamblium's".to_owned()),
+        },
     };
     if let Some(f) = magnet_before_file() {
         let _ = fs::remove_file(f);
     }
     done.unwrap_or_else(|e| format!("magnet links: {e}"))
+}
+
+// PDF files (owner, Nov 15 2026: "when I open a PDF it does not offer Gamblium"). Gamblium is
+// offered, for this Windows user: in "Open with", and in Settings > Default apps, where the
+// owner can make it the default. It is never made the default by itself: Windows 11 keeps that
+// choice to the person (and protects it), and whatever opened PDFs before still does.
+const PDF_PROGID: &str = r"HKCU\Software\Classes\Gamblium.PDF";
+const PDF_OPEN_WITH: &str = r"HKCU\Software\Classes\.pdf\OpenWithProgids";
+const PDF_APP: &str = r"HKCU\Software\Classes\Applications\gamblium-app.exe";
+const CAPABILITIES: &str = r"HKCU\Software\Gamblium\Capabilities";
+const REGISTERED_APPS: &str = r"HKCU\Software\RegisteredApplications";
+
+/// The registry writes that offer Gamblium for PDFs (key, value name or "" for the default, data).
+pub fn pdf_entries(starter: &Path, icon: &Path) -> Vec<(String, String, String)> {
+    let open = format!("\"{}\" \"%1\"", starter.display());
+    let icon = format!("{},0", icon.display());
+    let e = |k: &str, v: &str, d: &str| (k.to_owned(), v.to_owned(), d.to_owned());
+    vec![
+        e(PDF_PROGID, "", "PDF document"),
+        e(&format!(r"{PDF_PROGID}\DefaultIcon"), "", &icon),
+        e(&format!(r"{PDF_PROGID}\Application"), "ApplicationName", "Gamblium"),
+        e(&format!(r"{PDF_PROGID}\shell\open"), "FriendlyAppName", "Gamblium"),
+        e(&format!(r"{PDF_PROGID}\shell\open\command"), "", &open),
+        e(PDF_OPEN_WITH, "Gamblium.PDF", ""),
+        e(PDF_APP, "FriendlyAppName", "Gamblium"),
+        e(&format!(r"{PDF_APP}\SupportedTypes"), ".pdf", ""),
+        e(&format!(r"{PDF_APP}\DefaultIcon"), "", &icon),
+        e(&format!(r"{PDF_APP}\shell\open\command"), "", &open),
+        e(CAPABILITIES, "ApplicationName", "Gamblium"),
+        e(CAPABILITIES, "ApplicationDescription", "A lean, private browser with its own PDF viewer and editor"),
+        e(&format!(r"{CAPABILITIES}\FileAssociations"), ".pdf", "Gamblium.PDF"),
+        e(REGISTERED_APPS, "Gamblium", r"Software\Gamblium\Capabilities"),
+    ]
+}
+
+fn offer_for_pdfs(starter: &Path, icon: &Path) -> String {
+    for (key, value, data) in pdf_entries(starter, icon) {
+        let mut args = vec!["add", key.as_str()];
+        if value.is_empty() {
+            args.push("/ve");
+        } else {
+            args.extend(["/v", value.as_str()]);
+        }
+        args.extend(["/t", "REG_SZ", "/d", data.as_str(), "/f"]);
+        if let Err(e) = reg(&args) {
+            return format!("PDF files: could not offer Gamblium ({e})");
+        }
+    }
+    shell_changed();
+    "PDF files: Gamblium is offered in Open with, and can be made the default in Settings > Default apps".into()
+}
+
+fn withdraw_from_pdfs() -> String {
+    let _ = reg(&["delete", PDF_PROGID, "/f"]);
+    let _ = reg(&["delete", PDF_OPEN_WITH, "/v", "Gamblium.PDF", "/f"]);
+    let _ = reg(&["delete", PDF_APP, "/f"]);
+    let _ = reg(&["delete", CAPABILITIES, "/f"]);
+    let _ = reg(&["delete", REGISTERED_APPS, "/v", "Gamblium", "/f"]);
+    shell_changed();
+    "PDF files: Gamblium is no longer offered".into()
+}
+
+/// Tells Explorer that file types changed, so the menu shows the new entry at once.
+fn shell_changed() {
+    #[cfg(windows)]
+    {
+        #[link(name = "shell32")]
+        extern "system" {
+            fn SHChangeNotify(event: i32, flags: u32, a: *const std::ffi::c_void, b: *const std::ffi::c_void);
+        }
+        // SHCNE_ASSOCCHANGED, SHCNF_IDLIST
+        unsafe { SHChangeNotify(0x0800_0000, 0, std::ptr::null(), std::ptr::null()) };
+    }
 }
 
 /// Removes the program, the shortcuts and the helper registration. The
@@ -383,6 +527,7 @@ pub fn remove(dry_run: bool) -> Result<Vec<String>, String> {
         log.push("would give magnet links back".into());
     } else {
         log.push(give_back_magnet_links());
+        log.push(withdraw_from_pdfs());
         if let Ok(true) = on_path(&base.join("app"), false) {
             log.push("PATH: the install folder was taken out".into());
         }
@@ -397,12 +542,47 @@ pub fn remove(dry_run: bool) -> Result<Vec<String>, String> {
                 if Some(&p) == me.as_ref() {
                     continue;
                 }
-                let _ = if p.is_dir() { fs::remove_dir_all(&p) } else { fs::remove_file(&p) };
+                // Said when something stays, not reported as removed (review 2, 1.18).
+                if let Err(e) = if p.is_dir() { fs::remove_dir_all(&p) } else { fs::remove_file(&p) } {
+                    log.push(format!("could not remove {}: {e}", p.display()));
+                }
             }
         }
         log.push(did(&format!("program files in {}", app.display())));
     }
+    // Everything else install and use made that is not the person's own data (review 2, 1.18):
+    // the browser copy and its GPU preference, downloaded updates, agents' extension copies and
+    // the helper's launcher. Profiles, sessions, keys, logins and records stay.
+    let browser = base.join("browser");
+    if browser.is_dir() {
+        if crate::update::any_gamblium_browser() {
+            log.push(format!("kept {} (a Gamblium browser is running from it; close it and remove again)", browser.display()));
+        } else {
+            if !dry_run {
+                if let Some(exe) = crate::rebrand::copy_dir().map(|d| d.join("brave.exe")) {
+                    let _ = reg(&["delete", r"HKCU\Software\Microsoft\DirectX\UserGpuPreferences", "/v", &exe.to_string_lossy(), "/f"]);
+                }
+                if let Err(e) = fs::remove_dir_all(&browser) {
+                    log.push(format!("could not remove {}: {e}", browser.display()));
+                }
+            }
+            log.push(did(&format!("the browser copy in {}", browser.display())));
+        }
+    }
+    let mut extra: Vec<PathBuf> = vec![base.join("updates"), base.join("native-host.bat")];
+    extra.extend(fs::read_dir(&base).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("agent-extension"))));
+    for p in extra.into_iter().filter(|p| p.exists()) {
+        if !dry_run {
+            if let Err(e) = if p.is_dir() { fs::remove_dir_all(&p) } else { fs::remove_file(&p) } {
+                log.push(format!("could not remove {}: {e}", p.display()));
+                continue;
+            }
+        }
+        log.push(did(&p.display().to_string()));
+    }
     log.push(format!("{} your profile in {}", if dry_run { "would keep" } else { "kept" }, base.join("User Data").display()));
+    // The owner's profile keeps its mark (sessions::OWNER_MARK): it stays the owner's after a
+    // remove and a new install.
     Ok(log)
 }
 
@@ -469,6 +649,11 @@ mod tests {
         assert!(s.contains(r"CreateShortcut('C:\Users\O''Neil\Desktop\Gamblium.lnk')"));
         assert!(s.contains(r"$s.TargetPath = 'C:\a\gamblium-app.exe'"));
         assert_eq!(magnet_command(Path::new(r"C:\a\gamblium-app.exe")), r#""C:\a\gamblium-app.exe" "%1""#);
+        let pdf = pdf_entries(Path::new(r"C:\a\gamblium-app.exe"), Path::new(r"C:\a\gamblium.ico"));
+        assert!(pdf.iter().any(|(k, v, d)| k.ends_with(r"Gamblium.PDF\shell\open\command") && v.is_empty() && d == r#""C:\a\gamblium-app.exe" "%1""#));
+        assert!(pdf.iter().any(|(k, v, _)| k.ends_with(r".pdf\OpenWithProgids") && v == "Gamblium.PDF"));
+        // Offered only: nothing touches the .pdf key's own default or the user's choice.
+        assert!(pdf.iter().all(|(k, v, _)| !(k.ends_with(r"Classes\.pdf") && v.is_empty()) && !k.contains("UserChoice")));
         let out = "\r\nHKEY_CURRENT_USER\\Software\\Classes\\magnet\\shell\\open\\command\r\n    (Default)    REG_SZ    \"C:\\x\\fdm.exe\" \"%1\"\r\n\r\n";
         assert_eq!(reg_default_value(out).as_deref(), Some(r#""C:\x\fdm.exe" "%1""#));
         assert_eq!(reg_default_value("ERROR: The system was unable to find the specified registry key or value."), None);

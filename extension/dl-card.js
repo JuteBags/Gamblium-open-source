@@ -94,6 +94,7 @@ export function showDownloadCard(info) {
   let shownAt = Date.now();
   let gone = false;
   let state = "running";
+  let failedAt = 0;
   const leave = () => {
     if (gone) return;
     gone = true;
@@ -121,6 +122,8 @@ export function showDownloadCard(info) {
     const d = r && r.download;
     if (d) {
       state = d.state === "done" ? "done" : d.state === "error" ? "error" : d.state === "stopped" ? "stopped" : "running";
+      // A new failure after Retry is held its full time too (review 9, G22).
+      if (state !== "error") failedAt = 0;
       const done = d.done || 0;
       const total = d.total || 0;
       fill.style.width = total ? Math.min(100, (done * 100) / total).toFixed(1) + "%" : "0";
@@ -130,7 +133,12 @@ export function showDownloadCard(info) {
         open.hidden = false;
         pause.hidden = true;
       } else if (state === "error") {
-        note.textContent = d.error ? String(d.error).slice(0, 120) : "Failed";
+        // Held its full time from the failure, and said plainly in a private window, where the
+        // job is then removed and nothing takes it over (review 4, B8).
+        if (!failedAt) { failedAt = Date.now(); shownAt = failedAt; }
+        note.textContent = (d.error ? String(d.error).slice(0, 120) : "Failed") + (info.incognito ? " (private windows keep no copy to try again)" : "");
+        // In a private window the job is removed: nothing would take a retry over.
+        if (info.incognito) pause.hidden = true;
         pause.textContent = "Retry";
       } else if (state === "stopped") {
         note.textContent = size(done) + (total ? " of " + size(total) : "") + " · Paused";

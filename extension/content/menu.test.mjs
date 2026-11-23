@@ -13,6 +13,11 @@ const flat = (items) => items.filter((i) => i.id);
 const heads = (items) => items.filter((i) => i.head).map((i) => [i.head, i.detail]);
 
 test('a plain right-click: the strip, Keep this tab awake, Screenshot, the three sub-menus, Inspect at the foot', () => {
+  // A password field offers a strong password first; other fields do not.
+  const pwMenu = menuFor({ page: 'https://a.example/', editable: true, password: true });
+  const pwGroup = JSON.stringify(pwMenu);
+  assert.ok(pwGroup.includes('pw-suggest') && pwGroup.includes('Password field'), 'password field menu');
+  assert.ok(!JSON.stringify(menuFor({ page: 'https://a.example/', editable: true })).includes('pw-suggest'), 'not on other fields');
   const m = menuFor({ page: 'https://a.example/' });
   assert.deepEqual(ids(m), ['back', 'forward', 'reload', 'bookmark']);
   // Keep this tab awake: one click, then Screenshot (one entry; its overlay picks the mode), then the sub-menus.

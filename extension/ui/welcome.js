@@ -3,7 +3,7 @@
 // while storage "onboarded" is not true. Every choice is saved the moment it
 // is made, so closing the tab loses nothing; "onboarded" is set when the
 // person finishes or skips.
-import { readPrefs, greeting, timeOptions, isPinned, togglePin, WIDGETS, ENGINES, STARTERS } from '../newtab/logic.js';
+import { readPrefs, greeting, timeOptions, isPinned, togglePin, WIDGETS, ENGINES, STARTERS, DEFAULT_LAYOUT } from '../newtab/logic.js';
 import { lookOf } from './pages-logic.js';
 import { siteIcon, siteIconEl } from '../site-icons.js';
 import './address.js'; // shown under the clean address
@@ -33,16 +33,59 @@ const local = (key, value) => {
 
 // ---- what is being chosen
 
-const stored = await chrome.storage.local.get({ newtab: null, colours: null });
+const stored = await chrome.storage.local.get({ newtab: null, colours: null, lookOwnKeys: [], newtabBefore: null });
 let prefs = readPrefs(stored.newtab);
+// This window's own card places stay its own (owner, Nov 16 2026: what a session chose wins), and
+// what it had is kept before the onboarding changes anything here (review 10, H15).
+const ownKeys = new Set(Array.isArray(stored.lookOwnKeys) ? stored.lookOwnKeys : []);
+if (!stored.newtabBefore && stored.newtab) chrome.storage.local.set({ newtabBefore: { at: Date.now(), newtab: stored.newtab, lookOwnKeys: [...ownKeys] } }).catch(() => {});
+// The cards this update shows by default (owner, Nov 16 2026), switched on as well as placed (H16).
+const DEFAULT_ON = ['closed', 'status', 'browsers', 'notes', 'todo'];
+const withDefaultCards = (w) => ({ ...(w || {}), ...Object.fromEntries(DEFAULT_ON.map((k) => [k, true])) });
+// One merge per onboarding run, not per write (review 10, H5): sessions merge once for this id.
+// A later visit of the page keeps the id of the run that is already in global memory.
+// Older global memory of this form has no run id: its version stands for it (as in followGlobal).
+const known = await helper({ type: 'global-get' });
+const runOf = (g) => (g?.look?.merge >= 2 ? g.look.mergeRun || g.version : null);
+let mergeRun = runOf(known?.global) || Date.now();
+// A window with nothing of its own yet starts from global memory, not from defaults (H17).
+if (!stored.newtab && known?.global?.look?.newtab) prefs = readPrefs(known.global.look.newtab);
+// The default cards, once, before the card screen is drawn: what the person then ticks or
+// unticks there stands. A window that chose its own cards keeps them.
+if (!ownKeys.has('widgets')) prefs.widgets = withDefaultCards(prefs.widgets);
 let theme = 'moon-dark';
 let colours = stored.colours; // {accent, bg} when the person made their own
 let imported = false;
 let bringShown = false;
 
+// Onboarding's choices are the browser's: global memory (helper), read by every session.
+// Written at most once a second while choosing (review 10, H5: every keystroke made a new version
+// that every session merged again), and always when the onboarding is finished.
+let globalTimer = null;
+function keepGlobalSoon() {
+  clearTimeout(globalTimer);
+  globalTimer = setTimeout(keepGlobal, 1200);
+}
+async function keepGlobal() {
+  clearTimeout(globalTimer);
+  // An onboarding tab in another window that wrote first set the run: this one joins it, so
+  // sessions merge once (review 10, H5).
+  const now = await helper({ type: 'global-get' });
+  mergeRun = runOf(now?.global) || mergeRun;
+  // The default card layout of this update (owner, Nov 16 2026), for every session; the default
+  // cards on for all even when this window chose its own.
+  const newtab = { ...prefs, layout: DEFAULT_LAYOUT, widgets: ownKeys.has('widgets') ? withDefaultCards(prefs.widgets) : prefs.widgets };
+  delete newtab.notes;
+  delete newtab.todos;
+  // merge 2: every session follows this once more, its own keys set aside (background.js followGlobal).
+  await helper({ type: 'global-set', look: { newtab, colours: colours ?? null, merge: 2, mergeRun } });
+}
 function keepPrefs() {
+  // This update's default cards here too, unless this window placed or chose its own.
+  if (!ownKeys.has('layout')) prefs.layout = DEFAULT_LAYOUT;
   chrome.storage.local.set({ newtab: prefs });
   local('gamblium.newtab', JSON.stringify(prefs));
+  keepGlobalSoon();
 }
 const pressed = (name) => document.querySelector(`input[name="${name}"]:checked`)?.value;
 
@@ -66,6 +109,7 @@ async function keepLook() {
   const look = wear();
   await chrome.storage.local.set({ colours: colours ?? null });
   local('gamblium.colours', colours ? JSON.stringify(colours) : null);
+  keepGlobal();
   // The preset decides the frame; with own colours the launcher derives it from them.
   helper({ type: 'brand-set', theme: look === 'light' ? 'moon-light' : 'moon-dark', darkPages: look === 'dark' && pressed('night') === 'yes' });
   paintDots();
@@ -167,7 +211,7 @@ const SCREENS = {
   night: { title: 'Should white websites go dark too?', line: 'Some sites only come in white. Gamblium can darken them for you.' },
   search: { title: 'Pick your search.', line: 'Used by the search box on every new tab.' },
   sites: { title: 'Choose the sites you use most.', line: 'They become tiles on your new tab, one click away.' },
-  import: { title: 'Bring your things?', line: 'Bookmarks, history and saved passwords can come over from Chrome, Edge or Firefox. Below: where you are signed in elsewhere, to sign in here too.' },
+  import: { title: 'Bring your things?', line: 'Passwords, addresses and autofill, bookmarks and history can come over from Chrome, Edge or Firefox in one click. Or press Next to start fresh.' },
   newtab: { title: 'Set up your new tab.', line: 'Pick what you want to see each time. Change it any time from the square at the bottom right of a new tab.' },
   done: { title: 'Ready.', line: 'The window\'s frame and tabs take the new look the next time Gamblium starts.', next: 'Open a new tab' },
 };
@@ -194,7 +238,9 @@ function show(id) {
   if (id === 'done') paintSummary();
   if (id === 'import' && !bringShown) {
     bringShown = true;
-    import('./bring.js').then((m) => m.renderBring($('bringBox'), { compact: true }));
+    import('./bring.js').then((m) => m.renderBring($('bringBox')));
+    // The summary at the end says whether the importer was opened.
+    $('bringBox').addEventListener('click', (e) => { if (e.target.closest('.bring-import')) imported = true; });
   }
   paintDots();
   (id === 'name' ? $('name') : $('title')).focus();
@@ -217,6 +263,9 @@ function paintSummary() {
 
 const done = () => chrome.storage.local.set({ onboarded: true });
 async function finish() {
+  // Finished with nothing changed still writes global memory: otherwise the onboarding came back
+  // at every start, for good (review 10, H2).
+  await keepGlobal();
   await done();
   location.replace(chrome.runtime.getURL('newtab/index.html'));
 }
@@ -225,10 +274,6 @@ async function forward() {
   if (at === 'search' && !prefs.search) {
     prefs.search = pressed('engine') ?? '';
     keepPrefs();
-  }
-  if (at === 'import' && pressed('import') === 'yes' && !imported) {
-    imported = true;
-    await chrome.tabs.create({ url: 'chrome://settings/importData', active: true });
   }
   const ids = order();
   show(ids[ids.indexOf(at) + 1]);

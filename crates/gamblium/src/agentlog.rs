@@ -34,6 +34,9 @@ pub fn describe(cmd: &Value) -> String {
                 format!("<{} characters>", v.as_str().map(|s| s.chars().count()).unwrap_or_else(|| v.to_string().len()))
             } else {
                 let s = match v {
+                    // An address keeps only its site: paths and queries can hold names, ids and
+                    // tokens, and the log is plain text (review 1, #32).
+                    Value::String(s) if k.eq_ignore_ascii_case("url") => site_only(s),
                     Value::String(s) => s.clone(),
                     other => other.to_string(),
                 };
@@ -44,6 +47,29 @@ pub fn describe(cmd: &Value) -> String {
         }
     }
     parts.join(" ")
+}
+
+/// "https://x.org/a/b?c" -> "https://x.org/…".
+fn site_only(url: &str) -> String {
+    match url.split_once("://") {
+        Some((scheme, rest)) => {
+            let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+            let more = rest.len() > authority.len() && rest[authority.len()..] != *"/";
+            // "user:token@host": what is before the @ is a sign-in, never written (review 6).
+            let host = authority.rsplit('@').next().unwrap_or("");
+            format!("{scheme}://{host}{}", if more { "/…" } else { "/" })
+        }
+        // "https:me:tok@x.org" (no //): nothing before an @ is written (review 7, E5).
+        // Its site only, as for "https://": the path and query are not written (review 8).
+        None => {
+            // The part before any path or query first, then without its "user:token@" (review 9,
+            // G16: an @ in the query was taken as the sign-in's end).
+            let head = url.split(['/', '?', '#']).next().unwrap_or("");
+            let site = head.rsplit('@').next().unwrap_or("");
+            let more = head.len() < url.len();
+            format!("{}{}", site.chars().take(60).collect::<String>(), if more { "/…" } else { "" })
+        }
+    }
 }
 
 /// "ok", or "error: <first 200 characters>".
@@ -77,6 +103,11 @@ fn stamp(secs: u64) -> (String, String) {
     (format!("{y:04}-{m:02}-{d:02}"), format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60))
 }
 
+/// One day's log stops growing at this size (owner, Nov 15 2026: logs must never fill the disk).
+pub const MAX_DAY_BYTES: u64 = 10 * 1024 * 1024;
+/// All the days together: the oldest days go first beyond this.
+pub const MAX_TOTAL_BYTES: u64 = 50 * 1024 * 1024;
+
 pub fn write(who: &str, cmd: &Value, answer: &Value, ms: u128) {
     let Some(dir) = dir() else { return };
     if fs::create_dir_all(&dir).is_err() {
@@ -84,8 +115,16 @@ pub fn write(who: &str, cmd: &Value, answer: &Value, ms: u128) {
     }
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let (day, time) = stamp(now);
-    let line = format!("{time} UTC  {who}  {}  -> {}  {ms} ms\n", describe(cmd), outcome(answer));
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(dir.join(format!("{day}.log"))) {
+    let file = dir.join(format!("{day}.log"));
+    let size = fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+    if size >= MAX_DAY_BYTES {
+        return; // full for today: the line below said so once
+    }
+    let mut line = format!("{time} UTC  {who}  {}  -> {}  {ms} ms\n", describe(cmd), outcome(answer));
+    if size + line.len() as u64 >= MAX_DAY_BYTES {
+        line = format!("{time} UTC  this day's log reached {} MB: nothing more is written until tomorrow\n", MAX_DAY_BYTES / 1024 / 1024);
+    }
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&file) {
         let _ = f.write_all(line.as_bytes());
     }
     // Old days go (once in a while is enough: on the first command of a day).
@@ -103,6 +142,24 @@ fn prune(dir: &std::path::Path, now: u64) {
             let _ = fs::remove_file(e.path());
         }
     }
+    // Then by size: the oldest days go until all of them fit.
+    let mut days: Vec<(String, u64, std::path::PathBuf)> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "log"))
+        .map(|e| (e.file_name().to_string_lossy().into_owned(), e.metadata().map(|m| m.len()).unwrap_or(0), e.path()))
+        .collect();
+    days.sort();
+    let mut total: u64 = days.iter().map(|d| d.1).sum();
+    for (_, len, path) in days.iter().take(days.len().saturating_sub(1)) {
+        if total <= MAX_TOTAL_BYTES {
+            break;
+        }
+        if fs::remove_file(path).is_ok() {
+            total -= len;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -116,9 +173,31 @@ mod tests {
         assert_eq!(line, "type selector=#q tab=4 text=<7 characters>");
         assert!(!line.contains("hunter2"));
         assert_eq!(describe(&json!({ "op": "eval", "expression": "document.cookie" })), "eval expression=<15 characters>");
-        assert_eq!(describe(&json!({ "op": "open", "url": "https://x.org/\nnext" })), "open url=https://x.org/ next");
+        assert_eq!(describe(&json!({ "op": "open", "url": "https://x.org/\nnext" })), "open url=https://x.org/…", "only the site is kept");
+        assert_eq!(describe(&json!({ "op": "open", "url": "https://x.org/" })), "open url=https://x.org/");
+        assert!(!describe(&json!({ "op": "open", "url": "https://x.org/reset?token=abc" })).contains("token"));
+        assert_eq!(describe(&json!({ "op": "open", "url": "https://me:s3cret@x.org/a" })), "open url=https://x.org/…");
+        assert!(!describe(&json!({ "op": "open", "url": "https:me:s3cret@x.org" })).contains("s3cret"));
+        assert!(!describe(&json!({ "op": "open", "url": "https:x.org?t=s3cret@y" })).contains("s3cret"));
         assert_eq!(outcome(&json!({ "ok": true })), "ok");
         assert_eq!(outcome(&json!({ "ok": false, "error": "no such tab\nat x" })), "error: no such tab at x");
+    }
+
+    #[test]
+    fn logs_never_outgrow_their_limits() {
+        let dir = std::env::temp_dir().join(format!("gamblium-logtest-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        // Eight old days of 8 MB each: 64 MB, over the 50 MB for all days.
+        for d in 1..=8 {
+            fs::write(dir.join(format!("2026-01-0{d}.log")), vec![b'x'; 8 * 1024 * 1024]).unwrap();
+        }
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        prune(&dir, now);
+        let left: u64 = fs::read_dir(&dir).unwrap().flatten().map(|e| e.metadata().unwrap().len()).sum();
+        assert!(left <= MAX_TOTAL_BYTES, "{left}");
+        assert!(dir.join("2026-01-08.log").is_file(), "the newest day stays");
+        assert!(!dir.join("2026-01-01.log").is_file(), "the oldest day goes first");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

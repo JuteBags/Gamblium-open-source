@@ -42,7 +42,7 @@ export function applyEvent(state, kind, d) {
   r.initiator = d.initiator ?? r.initiator ?? null;
 
   if (kind === "before" && d.requestBody) {
-    if (d.requestBody.formData) r.requestForm = d.requestBody.formData;
+    if (d.requestBody.formData) r.requestForm = Object.fromEntries(Object.entries(d.requestBody.formData).map(([k, v]) => [k, /pass|pwd|secret|token|otp|pin|cvv|card|auth|key/i.test(k) ? (Array.isArray(v) ? v : [v]).map((x) => `(${String(x).length} characters)`) : v]));
     else if (d.requestBody.raw) r.requestBodyBytes = d.requestBody.raw.reduce((n, p) => n + (p.bytes ? p.bytes.byteLength : 0), 0);
   }
   if (kind === "sendHeaders") r.requestHeaders = headerList(d.requestHeaders);

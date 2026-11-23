@@ -168,7 +168,7 @@ pub fn browsers(exe: &str) -> Vec<(u32, Option<String>)> {
                 .cmd()
                 .iter()
                 .map(|a| a.to_string_lossy().into_owned())
-                .find_map(|a| a.strip_prefix("--user-data-dir=").map(|v| v.trim_matches('"').to_owned()));
+                .filter_map(|a| a.get(..16).filter(|p| p.eq_ignore_ascii_case("--user-data-dir=")).map(|_| a[16..].trim_matches('"').to_owned())).last(); // Chromium keeps the last one (review 7, E1)
             (pid.as_u32(), dir)
         })
         .collect()
@@ -180,6 +180,29 @@ pub fn exe_of(pid: u32) -> Option<std::path::PathBuf> {
     let p = sysinfo::Pid::from_u32(pid);
     sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[p]), true, ProcessRefreshKind::nothing().with_exe(UpdateKind::Always));
     sys.process(p).and_then(|p| p.exe()).map(|e| e.to_path_buf())
+}
+
+/// Stops a process and the processes it started, directly through Windows (no `taskkill` program:
+/// a burst of hidden kill programs is what antivirus guessing scores as malware; owner, Nov 20 2026).
+pub fn kill_tree(pid: u32) {
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    let mut doomed = vec![sysinfo::Pid::from_u32(pid)];
+    let mut i = 0;
+    while i < doomed.len() {
+        let parent = doomed[i];
+        for (p, proc_) in sys.processes() {
+            if proc_.parent() == Some(parent) && !doomed.contains(p) {
+                doomed.push(*p);
+            }
+        }
+        i += 1;
+    }
+    for p in doomed {
+        if let Some(proc_) = sys.process(p) {
+            proc_.kill();
+        }
+    }
 }
 
 pub fn is_running(pid: u32) -> bool {
@@ -210,7 +233,7 @@ pub fn browser_running(exe: &str, user_data_dir: Option<&std::path::Path>) -> bo
             .cmd()
             .iter()
             .map(|a| a.to_string_lossy().to_ascii_lowercase())
-            .find_map(|a| a.strip_prefix("--user-data-dir=").map(|v| v.trim_matches('"').to_owned()));
+            .filter_map(|a| a.get(..16).filter(|p| p.eq_ignore_ascii_case("--user-data-dir=")).map(|_| a[16..].trim_matches('"').to_owned())).last(); // Chromium keeps the last one (review 7, E1)
         match (&want, udd) {
             (None, None) => true,
             (Some(w), Some(u)) => u.trim_end_matches('\\') == w.trim_end_matches('\\'),

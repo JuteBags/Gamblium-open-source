@@ -59,7 +59,15 @@ test('readPrefs fills in defaults and drops what is wrong', () => {
   assert.equal(p.pins.length, 1);
   assert.equal(p.widgets.notes, true);
   assert.equal(p.widgets.clock, true);
+  // Recent sessions first; saved tab sets and Most visited off (owner, Nov 16 2026).
+  assert.equal(p.widgets.browsers, true);
   assert.equal(p.widgets.sessions, false);
+  assert.equal(p.widgets.top, false);
+  // Once moved over, a person's own choice stays.
+  const mine = readPrefs({ sessionDeck: true, widgets: { top: true, browsers: false } });
+  assert.equal(mine.widgets.top, true);
+  assert.equal(mine.widgets.browsers, false);
+  assert.equal(mine.sessionDeck, true);
   assert.equal(p.backdrop, 'moon');
   assert.equal(p.name, 'Asha');
   assert.deepEqual(readPrefs(null).pins, []);
@@ -139,7 +147,8 @@ test('new settings: clock, to-dos and zones are cleaned', () => {
   assert.deepEqual(p.todos, [{ text: 'call', done: true }]);
   assert.deepEqual(p.zones, ['Asia/Kolkata']);
   assert.equal(readPrefs({ clock: 'noon' }).clock, 'auto');
-  assert.equal(readPrefs({}).widgets.todo, false);
+  // To do and Notes are among the default cards (owner, Nov 16 2026).
+  assert.equal(readPrefs({}).widgets.todo, true);
   assert.equal(new Set(WIDGETS.map((w) => w.id)).size, WIDGETS.length);
   assert.equal(cleanTodos(Array.from({ length: 99 }, () => ({ text: 'a' }))).length, 40);
 });
@@ -197,8 +206,12 @@ test('starter sites become pins and come off again', () => {
 
 test('the card layout: every card once, sizes in range, rubbish dropped', async () => {
   const { readLayout, CARDS, cardSize, readPrefs } = await import('./logic.js');
+  // A new page: Recently closed, Right now, Recent sessions, Notes (two wide), To do, then the rest.
   const plain = readLayout(null);
-  assert.deepEqual(plain, { order: CARDS, size: {}, pack: true });
+  assert.deepEqual(plain.order.slice(0, 5), ['closed', 'status', 'browsers', 'notes', 'todo']);
+  assert.equal(plain.order.length, CARDS.length);
+  assert.deepEqual(plain.size, { notes: { w: 2, h: 1 } });
+  assert.equal(plain.pack, true);
   assert.equal(readLayout({ pack: false }).pack, false);
   assert.equal(readLayout({ pack: 0 }).pack, true); // only a plain "off" switches it off
   const l = readLayout({ order: ['notes', 'nope', 'top', 'notes', 'clock'], size: { top: { w: 9, h: 2 }, notes: { w: 1, h: 1 }, status: { w: 'x', h: 0 }, nope: { w: 2, h: 2 } } });
@@ -230,7 +243,7 @@ test('moving a card: before another, to the end, and one step among the shown ca
 test('resizing a card: kept in range, 1 x 1 is forgotten, the corner snaps to columns and rows', async () => {
   const { readLayout, sizeCard, snapSize, rowsFor } = await import('./logic.js');
   assert.equal(sizeCard(readLayout({ pack: false }), 'top', 2, 2).pack, false);
-  let l = sizeCard(readLayout(null), 'top', 2, 2);
+  let l = sizeCard(readLayout({}), 'top', 2, 2);
   assert.deepEqual(l.size, { top: { w: 2, h: 2 } });
   l = sizeCard(l, 'top', 7, 0);
   assert.deepEqual(l.size, { top: { w: 3, h: 1 } });

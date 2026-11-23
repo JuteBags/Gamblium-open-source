@@ -20,7 +20,7 @@ test('a private key inside any file is refused', () => {
     writeFileSync(join(dir, 'oops.js'), `const k = '${header}';`);
     assert.deepEqual(refusals(dir, ['ok.txt', 'oops.js']), ['oops.js: holds a private key']);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
   }
 });
 

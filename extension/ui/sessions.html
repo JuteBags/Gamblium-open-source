@@ -17,10 +17,7 @@
   <span class="product">Gamblium</span>
   <nav aria-label="Gamblium pages">
     <a href="dashboard.html">Tabs and memory</a>
-    <span class="navhead">Library</span>
-    <a class="sub" href="history.html">History</a>
-    <a class="sub" href="downloads.html">Downloads</a>
-    <a class="sub" href="sessions.html" aria-current="page">Sessions</a>
+    <a href="sessions.html" aria-current="page">Sessions</a>
     <a href="security.html">Security</a>
     <a href="settings.html">Settings</a>
   </nav>
@@ -29,8 +26,8 @@
 <main class="page sessions">
   <div class="title">
     <div class="titlerow">
-      <h1>Sessions</h1>
-      <button type="button" class="iconlink" id="sGear" aria-expanded="false" aria-controls="sSettings" title="Session settings" aria-label="Session settings"><svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M6.9 1.6h2.2l.4 1.8 1.3.7 1.7-.7 1.1 1.9-1.3 1.2v1.5l1.3 1.2-1.1 1.9-1.7-.7-1.3.7-.4 1.8H6.9l-.4-1.8-1.3-.7-1.7.7-1.1-1.9 1.3-1.2V6.5L2.4 5.3l1.1-1.9 1.7.7 1.3-.7z"/><circle cx="8" cy="8" r="2"/></svg></button>
+      <h1>Session manager</h1>
+      <button type="button" class="iconlink retired" id="sGear" aria-expanded="false" aria-controls="sSettings" title="Session settings" aria-label="Session settings"><svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M6.9 1.6h2.2l.4 1.8 1.3.7 1.7-.7 1.1 1.9-1.3 1.2v1.5l1.3 1.2-1.1 1.9-1.7-.7-1.3.7-.4 1.8H6.9l-.4-1.8-1.3-.7-1.7.7-1.1-1.9 1.3-1.2V6.5L2.4 5.3l1.1-1.9 1.7.7 1.3-.7z"/><circle cx="8" cy="8" r="2"/></svg></button>
     </div>
   </div>
   <!-- Set once or read once: behind the icon by the title (Rule 11). -->
@@ -66,18 +63,8 @@
 
   <div id="said" class="notice" role="status" hidden></div>
 
-  <section class="panel named" id="named" aria-labelledby="named-title" hidden>
-    <header>
-      <h2 id="named-title" title="Each one is a browser of its own: logins, extensions and proxy stay in it.">Named sessions <span id="namedCount" class="n num"></span></h2>
-    </header>
+  <section class="panel named" id="named" aria-label="New session" hidden>
     <div id="namedSaid" class="notice" role="status" hidden></div>
-    <div class="namedtools" id="namedTools" hidden>
-      <input id="nq" type="search" placeholder="Find a session" aria-label="Find a session by name" autocomplete="off" spellcheck="false">
-      <div class="picked" id="namedPicked" role="group" aria-label="Selected sessions" hidden></div>
-    </div>
-    <ul id="namedRows" class="namedlist"></ul>
-    <p id="namedNomatch" class="empty" hidden>No session has a name like that.</p>
-    <p id="namedNone" class="empty" hidden title="Or from a terminal: gamblium-cli create <name>">No sessions yet.</p>
     <form id="namedForm" class="namedform" autocomplete="off">
       <label class="sr" for="namedName">Name for a new session</label>
       <input type="text" id="namedName" maxlength="40" spellcheck="false" placeholder="New session: a name, e.g. research">
@@ -87,12 +74,22 @@
       <button type="submit" class="primary" id="namedOpen">Create and open</button>
       <button type="submit" class="quiet" id="namedHidden" title="Create it and keep it running with no window">without a window</button>
     </form>
+    <div class="sfilter seg retired" id="sfilter" role="group" aria-label="Show">
+      <button type="button" data-filter="all" aria-pressed="true">All</button>
+      <button type="button" data-filter="named" aria-pressed="false">Named</button>
+      <button type="button" data-filter="unnamed" aria-pressed="false">Unnamed</button>
+      <button type="button" data-filter="sets" aria-pressed="false">Saved tab sets</button>
+    </div>
+    <div class="namedtools" id="namedTools" hidden>
+      <input id="nq" type="search" placeholder="Find a session or a tab: a name, an address, a title" aria-label="Find a session or a tab" autocomplete="off" spellcheck="false">
+      <div class="picked" id="namedPicked" role="group" aria-label="Selected sessions" hidden></div>
+    </div>
   </section>
 
-  <section class="panel now" aria-labelledby="now-title">
+  <section class="panel now" id="ownCard" aria-labelledby="now-title">
     <div class="nowmain">
       <header>
-        <h2 id="now-title">Open now</h2>
+        <h2 id="now-title">This Gamblium <span class="kind">your own, every window you open normally</span> <button type="button" id="mainRename" class="quiet later" hidden>Rename</button></h2>
         <p id="nowLine" class="lead num"></p>
       </header>
       <ul id="nowWins" class="wins" aria-label="Your open windows, one row each"></ul>
@@ -100,29 +97,47 @@
     </div>
     <form id="saveForm" class="saveform" autocomplete="off">
       <div class="savebar">
-        <label class="sr" for="name">Name for these tabs</label>
-        <input type="text" id="name" maxlength="60" spellcheck="false" placeholder="Name for these tabs">
-        <div class="seg" role="group" aria-label="What to save">
+        <label class="sr" for="name">Name for a fork or clone</label>
+        <input type="text" id="name" maxlength="60" spellcheck="false" placeholder="Name for a fork or clone (optional)">
+        <div class="seg retired" role="group" aria-label="What to save">
           <button type="button" data-scope="all" aria-pressed="true">Every window</button>
           <button type="button" data-scope="window" aria-pressed="false">Only this window</button>
         </div>
-        <button type="submit" class="primary" id="saveKeep">Save these tabs</button>
-        <button type="submit" id="saveClose" title="Closing them gives their memory back; one empty window stays open.">Save and close</button>
+        <button type="submit" class="primary retired" id="saveKeep">Save these tabs</button>
+        <button type="submit" class="retired" id="saveClose" title="Closing them gives their memory back; one empty window stays open.">Save and close</button>
+        <button type="button" id="forkNow" title="A child session in its own window, signed in everywhere this one is, with none of these tabs.">Fork</button>
+        <button type="button" id="cloneNow" title="A new main session in its own window: the same sign-ins and these same tabs, to grow on its own.">Clone</button>
       </div>
     </form>
   </section>
+  <h2 class="sechead" id="activeHead">Active sessions <span id="activeCount" class="n num"></span></h2>
+  <p id="activeNone" class="empty sechint">No other session is open.</p>
+  <ul id="activeRows" class="namedlist panel" aria-label="Sessions open now" hidden></ul>
 
   <section class="panel sesspanel" aria-labelledby="list-title">
     <header>
-      <h2 id="list-title">Tabs put away <span id="count" class="n num"></span></h2>
+      <h2 id="list-title">Inactive sessions <span id="inactCount" class="n num"></span></h2>
+    </header>
+    <ul id="namedRows" class="namedlist"></ul>
+    <p id="namedNomatch" class="empty" hidden>No session has a name like that.</p>
+    <p id="namedNone" class="empty" hidden></p>
+    <p id="inactNone" class="empty" hidden>Nothing inactive.</p>
+  </section>
+
+  <!-- Saved tab sets ("Tabs put away") are snapshots of tabs, not browsers: their own list
+       (owner, Nov 16 2026: one under "Inactive sessions" read as a session). -->
+  <section class="panel sesspanel retired" aria-labelledby="sets-title">
+    <header>
+      <h2 id="sets-title">Saved tab sets <span id="count" class="n num"></span></h2>
       <div class="row">
-        <input id="sq" type="search" placeholder="Find a tab: an address, a title, a name" aria-label="Find in tabs put away" autocomplete="off" spellcheck="false" hidden>
+        <input id="sq" type="search" placeholder="Find a tab: an address, a title, a name" aria-label="Find in saved tab sets" autocomplete="off" spellcheck="false" hidden>
       </div>
     </header>
-    <p id="none" class="empty" hidden>Nothing put away yet.</p>
-    <p id="nomatch" class="empty" hidden>Nothing put away holds a tab like that.</p>
+    <p id="none" class="empty" hidden>No saved tab sets.</p>
+    <p id="nomatch" class="empty" hidden>No saved tab set holds a tab like that.</p>
     <p id="foundLine" class="lead num" hidden></p>
     <ul id="rows" class="sesslist"></ul>
+    <ul id="mirrorRows" class="sesslist"></ul>
   </section>
 
 </main>

@@ -33,3 +33,5 @@ temp, one window at a time (`cdp.mjs`).
 - `idle.mjs`: what a hidden page of ours costs.
 - `look_files.py`: save and restore the helper's look files around a run.
 - `real.mjs`, `verify.mjs`, `tour.mjs`, `forcedark.mjs`, `menu.mjs`: the preset checks described in `presets/README.md`.
+
+- `pdf-viewer-layouts.png`: where the tools sit in Acrobat (from Adobe's description), Chrome, Edge and Gamblium PDF (Nov 15 2026).

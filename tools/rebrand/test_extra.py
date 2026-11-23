@@ -217,6 +217,14 @@ class Extra(unittest.TestCase):
         self.assertEqual(X.hide_menu_button(new)[1], ["menu button: already hidden"])
         self.assertIn("left alone", X.hide_menu_button(bytes(64))[1][0])
 
+    def test_set_visible_is_found_on_chromium_157_and_158(self):
+        # 157 (Brave 1.99.57) and 158 (Brave 1.100.58, as read from its chrome.dll) differ in the prologue.
+        v157 = bytes.fromhex("415741565657534883ec4089d34889ce488b05") + bytes(4) + bytes.fromhex("4831e04889442438408ab9") + bytes(4) + bytes.fromhex("4038d775")
+        v158 = bytes.fromhex("41565657534883ec4889d34889ce488b05dbe7220d4831e04889442440408ab9d80100004038d775")
+        for code in (v157, v158):
+            found = [m.start() for m in X._SET_VISIBLE.finditer(bytes.fromhex("cc") * 8 + code)]
+            self.assertEqual(found, [8])  # the function's first byte
+
     def test_the_new_tab_question_is_silenced_only_when_the_place_is_certain(self):
         # A tiny program: headers, a .text section with one instruction pointing at the name, then the mov.
         code = bytearray(b"\x90" * 0x200)

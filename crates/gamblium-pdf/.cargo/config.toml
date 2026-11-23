@@ -1,0 +1,4 @@
+[target.wasm32-unknown-unknown]
+# simd128: the renderer (vello_cpu) draws with vector instructions; without it, plain code
+# several times slower (Gamblium PDF, Nov 16 2026). Every browser Gamblium runs on has it.
+rustflags = ["--cfg", "getrandom_backend=\"wasm_js\"", "-C", "target-feature=+simd128"]

@@ -198,6 +198,13 @@ pub fn start_apply(installer: &Path, start_after: bool) -> Result<(), String> {
 
 /// Every other browser started from Gamblium's browser folder: named sessions are closed their
 /// own way (tabs noted, they come back), anything else (the agent profile, test windows) ends.
+/// Is any browser started from Gamblium's browser folder running (a session's included)?
+pub fn any_gamblium_browser() -> bool {
+    let Some(folder) = crate::rebrand::copy_dir() else { return false };
+    let folder = folder.to_string_lossy().to_ascii_lowercase();
+    crate::procs::browsers("brave.exe").into_iter().any(|(pid, _)| crate::procs::exe_of(pid).is_some_and(|e| e.to_string_lossy().to_ascii_lowercase().starts_with(&folder)))
+}
+
 fn stop_other_browsers() {
     let Some(folder) = crate::rebrand::copy_dir() else { return };
     let folder = folder.to_string_lossy().to_ascii_lowercase();
@@ -207,14 +214,26 @@ fn stop_other_browsers() {
             .filter(|(pid, _)| crate::procs::exe_of(*pid).is_some_and(|e| e.to_string_lossy().to_ascii_lowercase().starts_with(&folder)))
             .collect()
     };
+    // All closed at once, each with its own polite wait (review 5, C10: 30 s per window, one after
+    // another).
+    let mut closing = Vec::new();
     for (_, dir) in ours() {
         let name = dir.as_deref().and_then(|d| {
             let lower = d.to_ascii_lowercase().replace('/', "\\");
             lower.contains("\\gamblium\\sessions\\").then(|| d.trim_end_matches(['\\', '/']).rsplit(['\\', '/']).next().unwrap_or("").to_owned())
         });
         if let Some(name) = name.filter(|n| !n.is_empty()) {
-            let _ = crate::sessions::command(&["close".to_owned(), name]);
+            // Sessions shown in a window come back in one after the update (reopen_sessions).
+            if dir.as_deref().is_some_and(|d| crate::sessions::restart_kind(std::path::Path::new(d)) == "window") {
+                note_reopen(&name);
+            }
+            closing.push(std::thread::spawn(move || {
+                let _ = crate::sessions::command(&["close".to_owned(), name, "--keep-unpacked".to_owned()]);
+            }));
         }
+    }
+    for t in closing {
+        let _ = t.join();
     }
     for _ in 0..20 {
         let left = ours();
@@ -222,7 +241,7 @@ fn stop_other_browsers() {
             return;
         }
         for (pid, _) in left {
-            let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).output();
+            crate::procs::kill_tree(pid);
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
@@ -232,6 +251,14 @@ fn stop_other_browsers() {
 /// runs the installer silently, then starts Gamblium if asked.
 pub fn apply(installer: &Path, start_after: bool) -> Result<(), String> {
     let profile = crate::install::profile_dir().ok_or("LOCALAPPDATA is not set")?;
+    // The owner's own Gamblium comes back only if it was open or asked for the update; otherwise
+    // the start mode (a No session window, or the last session), and only when nothing else comes
+    // back (review 3, A15: every update opened the owner's whole old profile).
+    let asked_by_main = asked_by_file().and_then(|f| fs::read_to_string(f).ok()).is_some_and(|t| t.trim() == "main");
+    let owner_back = asked_by_main || crate::procs::browser_running("brave.exe", Some(&profile));
+    if let Some(f) = asked_by_file() {
+        let _ = fs::remove_file(f);
+    }
     for _ in 0..1200 {
         if !crate::procs::browser_running("brave.exe", Some(&profile)) {
             break;
@@ -239,27 +266,148 @@ pub fn apply(installer: &Path, start_after: bool) -> Result<(), String> {
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
     if crate::procs::browser_running("brave.exe", Some(&profile)) {
+        // A session that asked has closed itself: it comes back even though nothing was installed
+        // (review 3, A7).
+        reopen_sessions();
+        set_state(json!({ "state": "error", "error": "your own Gamblium stayed open: close it, then Restart to update again", "at": now() }));
         return Err("Gamblium is still open".into());
     }
     // Browsers nobody sees keep the browser's files open and the installer cannot replace them
     // (owner, Nov 14 2026: "could not be set up (code 1)" with a hidden test session running).
+    // Packers waiting to start leave (they look every second), then those at work are stopped.
+    crate::pack::set_updating(true);
+    std::thread::sleep(std::time::Duration::from_secs(2));
     stop_other_browsers();
-    set_state(json!({ "state": "installing", "at": now() }));
-    let status = std::process::Command::new(installer)
-        .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"])
-        .status()
-        .map_err(|e| e.to_string())?;
-    if !status.success() {
-        set_state(json!({ "state": "error", "error": format!("the installer ended with {status}"), "at": now() }));
-        return Err(format!("the installer ended with {status}"));
+    // A pack at work holds gamblium.exe open and the installer could not replace it (review 4,
+    // B12): each is asked to stop, which leaves its folder as it was.
+    for d in crate::sessions::all_profile_dirs() {
+        crate::pack::stop_pack(&d, 60);
     }
-    set_state(json!({ "state": "installed", "at": now() }));
+    set_state(json!({ "state": "installing", "at": now() }));
+    let ran = std::process::Command::new(installer).args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"]).status();
+    // An installer that could not start (quarantined, locked) still brings the browsers back
+    // (review 3, A1: every browser stayed closed and the state stuck at "installing").
+    let status = match ran {
+        Ok(s) => s,
+        Err(e) => {
+            crate::pack::set_updating(false);
+            set_state(json!({ "state": "error", "error": format!("the installer could not start: {e}"), "at": now() }));
+            if start_after {
+                start_again(owner_back);
+            }
+            return Err(format!("the installer could not start: {e}"));
+        }
+    };
+    crate::pack::set_updating(false);
+    let ok = status.success();
+    if ok {
+        set_state(json!({ "state": "installed", "at": now() }));
+    } else {
+        // The browsers come back on the version that was there (review 2, P0 1.2).
+        set_state(json!({ "state": "error", "error": format!("the installer ended with {status}"), "at": now() }));
+    }
     if start_after {
-        if let Some(app) = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Gamblium").join("app").join("gamblium-app.exe")) {
-            let _ = crate::launch::spawn_detached(&app, &[]);
+        start_again(owner_back);
+    } else {
+        reopen_sessions();
+    }
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("the installer ended with {status}"))
+    }
+}
+
+fn asked_by_file() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Gamblium").join("update-asked-by.txt"))
+}
+
+/// "Restart to update" was clicked in this browser: "main" (the owner's own Gamblium) or a
+/// session's id (noted to open again; review 3, A7: the clicking session closed itself before the
+/// updater looked, and stayed closed).
+pub fn note_asked_by(who: Option<&str>) {
+    let Some(f) = asked_by_file() else { return };
+    match who {
+        Some("main") => {
+            let _ = fs::write(&f, "main");
+        }
+        Some(id) => {
+            let _ = fs::remove_file(&f);
+            note_reopen(id);
+        }
+        None => {
+            let _ = fs::remove_file(&f);
         }
     }
-    Ok(())
+}
+
+fn reopen_file() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Gamblium").join("reopen-after-update.txt"))
+}
+/// Takes a session back off the list to reopen (the updater did not start: review 10, H10).
+pub fn forget_reopen(id: &str) {
+    if let Some(f) = reopen_file() {
+        let Ok(list) = std::fs::read_to_string(&f) else { return };
+        let kept: String = list.lines().filter(|l| l.split('#').next() != Some(id)).map(|l| format!("{l}\n")).collect();
+        let _ = if kept.trim().is_empty() { std::fs::remove_file(&f) } else { std::fs::write(&f, kept) };
+    }
+}
+fn note_reopen(id: &str) {
+    if let Some(f) = reopen_file() {
+        let mut list = std::fs::read_to_string(&f).unwrap_or_default();
+        if !list.lines().any(|l| l.split('#').next() == Some(id)) {
+            list.push_str(id);
+            list.push('\n');
+            let _ = std::fs::write(&f, list);
+        }
+    }
+}
+/// After the install: the owner's own Gamblium if it was open or asked (--main: with no
+/// arguments the starter opens the start mode instead), the sessions that were in a window, and
+/// with neither, what the desktop icon opens (the start mode).
+fn start_again(owner_back: bool) {
+    let app = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Gamblium").join("app").join("gamblium-app.exe"));
+    let sessions_back = reopen_file().is_some_and(|f| fs::read_to_string(f).is_ok_and(|t| t.lines().any(|l| !l.trim().is_empty())));
+    if let Some(app) = &app {
+        if owner_back {
+            let _ = crate::launch::spawn_detached(app, &["--main".to_owned()]);
+        } else if !sessions_back {
+            let _ = crate::launch::spawn_detached(app, &[]);
+        }
+    }
+    reopen_sessions();
+}
+
+/// Sessions that were in a window before the update open in one again.
+fn reopen_sessions() {
+    let Some(f) = reopen_file() else { return };
+    let Ok(list) = std::fs::read_to_string(&f) else { return };
+    let Some(cli) = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Gamblium").join("app").join("gamblium.exe")) else { return };
+    let mut left = String::new();
+    for line in list.lines().filter(|l| !l.is_empty()) {
+        // "id" or "id#tries" (an id that did not open at an earlier update).
+        let (id, tries) = line.split_once('#').map(|(b, t)| (b, t.parse::<u32>().unwrap_or(0))).unwrap_or((line, 0));
+        let bare = id;
+        // The installed program, not this copy in the updates folder: from there the extension
+        // and presets are not found and a session would not start (review 2, P0 1.1).
+        let ok = std::process::Command::new(&cli)
+            .args(["cli", "open", id])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        crate::launch::relaunch_log(&format!("update: session {id} {}", if ok { "opened again" } else { "did NOT open again (kept in the list)" }));
+        // Kept for the next update, at most three times (review 3, A22: replayed for ever).
+        if !ok && tries < 2 {
+            left.push_str(&format!("{bare}#{}\n", tries + 1));
+        }
+    }
+    if left.is_empty() {
+        let _ = std::fs::remove_file(&f);
+    } else {
+        let _ = std::fs::write(&f, left);
+    }
 }
 
 #[cfg(test)]

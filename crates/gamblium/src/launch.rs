@@ -140,12 +140,88 @@ pub fn apply_preferences(
     apply_prefs_file(&user_data_dir.join(profile_directory).join("Preferences"), prefs, dry_run)
 }
 
+/// Writes `<file>.gamblium.good` (tmp, sync, rename) when its text differs.
+fn keep_last_good(path: &Path, text: &str) {
+    let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let good = path.with_file_name(format!("{name}.gamblium.good"));
+    if fs::read_to_string(&good).is_ok_and(|t| t == text) {
+        return;
+    }
+    let tmp = path.with_file_name(format!("{name}.gamblium.good.tmp"));
+    let ok = fs::File::create(&tmp).and_then(|mut f| {
+        io::Write::write_all(&mut f, text.as_bytes())?;
+        f.sync_all()
+    });
+    if ok.is_ok() {
+        let _ = fs::rename(&tmp, &good);
+    } else {
+        let _ = fs::remove_file(&tmp);
+    }
+}
+
 /// Sets dotted prefs in one of Brave's JSON pref files. Only safe while Brave
 /// is closed: it rewrites both files on exit.
 fn apply_prefs_file(path: &Path, prefs: &Map<String, Value>, dry_run: bool) -> io::Result<Vec<String>> {
     let mut root: Value = match fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str(&text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Value::Object(Map::new()),
+        Ok(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(v) => {
+                // The last good Local State, refreshed at every start that reads one (with its
+                // current key), synced: what a damaged one is restored from (review 6, D6: the
+                // first-ever copy could hold an older key, and many profiles had none).
+                if !dry_run && v.get("os_crypt").is_some() && path.file_name().is_some_and(|n| n == "Local State") {
+                    keep_last_good(path, &text);
+                }
+                v
+            }
+            // Preferences only. A damaged Local State is never handed to the browser: it holds the
+            // key that decrypts the profile's cookies and saved passwords, and a rebuilt one makes
+            // a new key, so every sign-in would be lost (review 4, B14). The start stops instead.
+            Err(_) if !dry_run && path.file_name().is_some_and(|n| n == "Preferences") => {
+                // Damaged (a power cut): kept aside as .corrupt and left to the browser, which
+                // rebuilds it; our settings go in next time (review 2, 1.19: the icon did nothing).
+                let mut aside = path.as_os_str().to_owned();
+                aside.push(".corrupt");
+                let _ = fs::copy(path, PathBuf::from(aside));
+                return Ok(Vec::new());
+            }
+            Err(e) => {
+                // A damaged Local State: our own copy of the original (written before our first
+                // change, the same encryption key inside) is put back, the damaged one kept aside
+                // (review 5, C2: the icon did nothing).
+                let file = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                // The last good copy first (current key), then the first original.
+                let read_good = |b: &Path| fs::read_to_string(b).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).filter(|v| v.get("os_crypt").is_some());
+                let last = path.with_file_name(format!("{file}.gamblium.good"));
+                let first = path.with_file_name(format!("{file}.gamblium.bak"));
+                let (backup, good) = match read_good(&last) {
+                    Some(v) => (last, Some(v)),
+                    None => (first.clone(), read_good(&first)),
+                };
+                match good {
+                    Some(v) if !dry_run => {
+                        let mut aside = path.as_os_str().to_owned();
+                        aside.push(".corrupt");
+                        let _ = fs::copy(path, PathBuf::from(aside));
+                        fs::copy(&backup, path)?;
+                        v
+                    }
+                    _ => return Err(io::Error::new(io::ErrorKind::InvalidData, e)),
+                }
+            }
+        },
+        // A Local State gone from a profile that has been used (it has its Default folder): the
+        // last good copy, with the key of its sign-ins, is put back first (review 8, F7).
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            let good = path.with_file_name(format!("{}.gamblium.good", path.file_name().unwrap_or_default().to_string_lossy()));
+            let used = path.parent().is_some_and(|d| d.join("Default").is_dir());
+            match fs::read_to_string(&good).ok().filter(|_| used && !dry_run && path.file_name().is_some_and(|n| n == "Local State")).and_then(|t| serde_json::from_str::<Value>(&t).ok().map(|v| (t, v))) {
+                Some((t, v)) if v.get("os_crypt").is_some() => {
+                    fs::write(path, t)?;
+                    v
+                }
+                _ => Value::Object(Map::new()),
+            }
+        }
         Err(e) => return Err(e),
     };
     let mut changed = Vec::new();
@@ -166,7 +242,12 @@ fn apply_prefs_file(path: &Path, prefs: &Map<String, Value>, dry_run: bool) -> i
         fs::copy(path, &backup)?;
     }
     let tmp = dir.join(format!("{name}.gamblium.tmp"));
-    fs::write(&tmp, serde_json::to_string(&root).unwrap())?;
+    {
+        // On disk before it replaces the file: a power cut left it empty (review 5, C2).
+        let mut f = fs::File::create(&tmp)?;
+        io::Write::write_all(&mut f, serde_json::to_string(&root).unwrap().as_bytes())?;
+        f.sync_all()?;
+    }
     fs::rename(&tmp, path)?;
     Ok(changed)
 }
@@ -202,10 +283,20 @@ pub const LAUNCH_INFO_FILE: &str = "gamblium-launch.json";
 
 /// `theme`: None keeps the theme of the last note, because the theme itself
 /// stays in the profile. `freeze`: the extension freezes hidden tabs.
-pub fn write_launch_info(user_data_dir: &Path, theme: Option<&str>, freeze: bool, welcome: bool) -> io::Result<()> {
+/// `seen`: a window a person looks at (not a test, agent, pen-test or hidden start), where the
+/// one onboarding after an update may show even when the first-start welcome is skipped.
+pub fn write_launch_info(user_data_dir: &Path, theme: Option<&str>, freeze: bool, welcome: bool, seen: bool) -> io::Result<()> {
     fs::create_dir_all(user_data_dir)?;
     let theme = theme.map(str::to_owned).or_else(|| read_launch_theme(user_data_dir));
-    fs::write(user_data_dir.join(LAUNCH_INFO_FILE), serde_json::json!({ "theme": theme, "freeze": freeze, "welcome": welcome }).to_string())
+    fs::write(user_data_dir.join(LAUNCH_INFO_FILE), serde_json::json!({ "theme": theme, "freeze": freeze, "welcome": welcome, "seen": seen }).to_string())
+}
+
+/// Whether this profile is a window a person looks at (see write_launch_info). False when unknown.
+pub fn read_launch_seen(user_data_dir: &Path) -> bool {
+    fs::read_to_string(user_data_dir.join(LAUNCH_INFO_FILE))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .is_some_and(|v| v["seen"] == json!(true))
 }
 
 /// Whether the welcome page may open in this profile (false for test,
@@ -239,6 +330,43 @@ pub fn note_force_dark(user_data_dir: &Path, on: bool) -> io::Result<()> {
     v["forceDark"] = json!(on);
     fs::create_dir_all(user_data_dir)?;
     fs::write(file, v.to_string())
+}
+
+/// Notes whether this start had no window, so a restart brings it back the same way (review 3,
+/// A12: the agent profile came back as a window in front of the person).
+pub fn note_hidden(user_data_dir: &Path, hidden: bool) -> io::Result<()> {
+    let file = user_data_dir.join(LAUNCH_INFO_FILE);
+    let mut v = fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_else(|| json!({}));
+    if !v.is_object() {
+        v = json!({});
+    }
+    v["hidden"] = json!(hidden);
+    fs::create_dir_all(user_data_dir)?;
+    fs::write(file, v.to_string())
+}
+pub fn was_hidden(user_data_dir: &Path) -> bool {
+    fs::read_to_string(user_data_dir.join(LAUNCH_INFO_FILE)).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).is_some_and(|v| v["hidden"] == true)
+}
+
+/// Notes whether the browser of this start shows PDFs in Gamblium PDF by itself (the rebranded
+/// copy's viewer page). The extension then leaves PDFs alone instead of sending them to its page.
+pub fn note_builtin_pdf(user_data_dir: &Path, on: bool) -> io::Result<()> {
+    let file = user_data_dir.join(LAUNCH_INFO_FILE);
+    let mut v = fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).unwrap_or_else(|| json!({}));
+    if !v.is_object() {
+        v = json!({});
+    }
+    v["builtinPdf"] = json!(on);
+    fs::create_dir_all(user_data_dir)?;
+    fs::write(file, v.to_string())
+}
+
+pub fn read_builtin_pdf(user_data_dir: &Path) -> bool {
+    fs::read_to_string(user_data_dir.join(LAUNCH_INFO_FILE))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .map(|v| v["builtinPdf"] == json!(true))
+        .unwrap_or(false)
 }
 
 /// Whether the profile was last started with forced dark.
@@ -367,11 +495,58 @@ pub fn keep_our_output_to_ourselves() {
 /// A file in a profile folder that agents drive (`launch --agent`).
 pub const AGENT_MARKER: &str = "gamblium-agent";
 
+/// No terminal window for a program we start (owner, Nov 20 2026: opening Gamblium showed a
+/// terminal, which reads as malware). A console program started by one with no console gets a
+/// new, visible one; with this it gets a hidden console, which everything it starts shares.
+pub fn no_console_window(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 pub fn spawn_detached(exe: &Path, args: &[String]) -> io::Result<()> {
     use std::process::{Command, Stdio};
     keep_our_output_to_ourselves();
-    Command::new(exe).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+    no_console_window(Command::new(exe).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())).spawn()?;
     Ok(())
+}
+
+/// Like `spawn_detached`, but the new program also leaves the caller's job (the browser puts its
+/// helper in one): a restart started by the helper must outlive the browser it closes. Falls back
+/// to a plain start where leaving the job is not allowed.
+pub fn spawn_outliving(exe: &Path, args: &[String]) -> io::Result<()> {
+    use std::process::{Command, Stdio};
+    keep_our_output_to_ourselves();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // A hidden console, not none (DETACHED_PROCESS): with none, every console program it
+        // starts (the launcher, taskkill, reg) opened a visible terminal window.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        let mut cmd = Command::new(exe);
+        cmd.args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB);
+        if cmd.spawn().is_ok() {
+            return Ok(());
+        }
+    }
+    spawn_detached(exe, args)
+}
+
+/// One line in `Gamblium\relaunch.log` (the last 200 lines are kept): what a restart did, so a
+/// failed one can be read afterwards instead of guessed.
+pub fn relaunch_log(line: &str) {
+    let Some(file) = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Gamblium").join("relaunch.log")) else { return };
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let mut lines: Vec<String> = fs::read_to_string(&file).unwrap_or_default().lines().map(str::to_owned).collect();
+    lines.push(format!("{at} {line}"));
+    let keep = lines.len().saturating_sub(200);
+    let _ = fs::write(&file, lines[keep..].join("\n") + "\n");
 }
 
 /// Chromium's "Auto Dark Mode for Web Contents": pages without a dark design
@@ -395,17 +570,71 @@ pub fn find_home() -> Option<PathBuf> {
 /// The agent profile's own copy of the extension. It is the same code with
 /// permission to look at every page, which is what lets `gamblium ctl` read
 /// and click without a prompt. Only the agent profile loads this copy.
+///
+/// The copy is named after its content (review 2, 1.8: every agent launch deleted and recopied
+/// one shared folder, so launches at the same time raced and a running agent browser lost files):
+/// the same code is reused untouched, new code goes to a new folder, and old copies are removed
+/// only when nothing holds them.
 pub fn agent_extension(source: &Path) -> io::Result<PathBuf> {
-    let dest = std::env::var_os("LOCALAPPDATA")
-        .map(|d| PathBuf::from(d).join("Gamblium").join("agent-extension"))
+    let root = std::env::var_os("LOCALAPPDATA")
+        .map(|d| PathBuf::from(d).join("Gamblium"))
         .ok_or_else(|| io::Error::other("LOCALAPPDATA is not set"))?;
-    if dest.is_dir() {
-        fs::remove_dir_all(&dest)?;
+    // Fingerprint: every file's path, size and write time under the source.
+    fn walk(base: &Path, p: &Path, h: &mut u64) {
+        let mut items: Vec<_> = fs::read_dir(p).into_iter().flatten().flatten().collect();
+        items.sort_by_key(|e| e.file_name());
+        for e in items {
+            let path = e.path();
+            let Ok(m) = e.metadata() else { continue };
+            let rel = path.strip_prefix(base).unwrap_or(&path).to_string_lossy().into_owned();
+            let t = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos() as u64);
+            for b in rel.bytes().chain(m.len().to_le_bytes()).chain(t.to_le_bytes()) {
+                *h = (*h ^ b as u64).wrapping_mul(0x100_0000_01b3); // FNV-1a
+            }
+            if m.is_dir() {
+                walk(base, &path, h);
+            }
+        }
     }
-    crate::install::copy_tree(source, &dest)?;
-    let manifest_path = dest.join("manifest.json");
-    let mut manifest: Value = serde_json::from_str(&fs::read_to_string(&manifest_path)?)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    walk(source, source, &mut h);
+    let dest = root.join(format!("agent-extension-{h:016x}"));
+    if dest.join("manifest.json").is_file() {
+        return Ok(dest);
+    }
+    // Built beside, then named: a launch never sees a half copy.
+    let tmp = root.join(format!("agent-extension-{h:016x}.tmp{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    crate::install::copy_tree(source, &tmp)?;
+    let built = (|| -> io::Result<()> {
+        let manifest_path = tmp.join("manifest.json");
+        let mut manifest: Value = serde_json::from_str(&fs::read_to_string(&manifest_path)?).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        agent_manifest(&mut manifest);
+        fs::write(&manifest_path, serde_json::to_string_pretty(&manifest).unwrap())
+    })();
+    if let Err(e) = built {
+        let _ = fs::remove_dir_all(&tmp);
+        return Err(e);
+    }
+    if fs::rename(&tmp, &dest).is_err() {
+        // Another launch made the same copy meanwhile: use it.
+        let _ = fs::remove_dir_all(&tmp);
+        if !dest.join("manifest.json").is_file() {
+            return Err(io::Error::other("could not set up the agent's copy of the extension"));
+        }
+    }
+    // Older copies go when nothing holds them (a running agent browser keeps its own).
+    for e in fs::read_dir(&root).into_iter().flatten().flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        let day_old = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|el| el.as_secs() > 86_400);
+        if (n == "agent-extension" || n.starts_with("agent-extension-")) && e.path() != dest && !n.contains(".tmp") && day_old {
+            let _ = fs::rename(e.path(), root.join(format!("{n}.old"))).and_then(|_| fs::remove_dir_all(root.join(format!("{n}.old"))));
+        }
+    }
+    Ok(dest)
+}
+
+fn agent_manifest(manifest: &mut Value) {
     manifest["host_permissions"] = json!(["<all_urls>"]);
     if let Some(perms) = manifest["permissions"].as_array_mut() {
         if !perms.contains(&json!("cookies")) {
@@ -422,13 +651,42 @@ pub fn agent_extension(source: &Path) -> io::Result<PathBuf> {
         }
     }
     manifest["name"] = json!("Gamblium (agent profile)");
-    fs::write(&manifest_path, serde_json::to_string_pretty(&manifest).unwrap())?;
-    Ok(dest)
 }
 
 /// A folder Brave has never run in.
 pub fn is_new_profile_folder(user_data_dir: &Path) -> bool {
     !user_data_dir.join("Local State").exists() && !user_data_dir.join("First Run").exists()
+}
+
+/// Brave's ad-block filter lists into a brand-new profile folder, from Gamblium's own profile.
+/// They are downloaded components kept per profile folder, so a new folder (a No session window,
+/// a new session, a test window) blocked nothing until they arrived: YouTube showed ads in its
+/// first minute (owner, Nov 23 2026; measured: 2 ad slots and an ad without, none with). Found by
+/// each component's own name, not by id. Returns how many were copied.
+pub fn seed_ad_block(to: &Path) -> usize {
+    let Some(from) = std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Gamblium").join("User Data")) else { return 0 };
+    if !from.is_dir() || from == to {
+        return 0;
+    }
+    let mut n = 0;
+    for e in fs::read_dir(&from).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.len() != 32 || !name.bytes().all(|b| (b'a'..=b'p').contains(&b)) || to.join(&name).exists() {
+            continue;
+        }
+        let dir = e.path();
+        let is_filter_list = fs::read_dir(&dir).into_iter().flatten().flatten().any(|v| {
+            fs::read_to_string(v.path().join("manifest.json"))
+                .ok()
+                .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+                .and_then(|m| m["name"].as_str().map(|s| s.contains("Ad Block Updater") || s.contains("Local Data Files")))
+                .unwrap_or(false)
+        });
+        if is_filter_list && crate::rebrand::copy_all(&dir, &to.join(&name)).is_ok() {
+            n += 1;
+        }
+    }
+    n
 }
 
 pub fn default_user_data_dir() -> Option<PathBuf> {
@@ -443,7 +701,7 @@ pub fn pentest_user_data_dir() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join(r"Gamblium\pentest-profile"))
 }
 
-const POLICY_KEY: &str = r"HKCU\Software\Policies\BraveSoftware\Brave";
+pub const POLICY_KEY: &str = r"HKCU\Software\Policies\BraveSoftware\Brave";
 
 /// `reg add` arguments for one policy. true/false and whole numbers become
 /// REG_DWORD, text becomes REG_SZ. Anything else is refused.
@@ -515,6 +773,62 @@ pub fn remove_policies(dry_run: bool) -> Result<Vec<String>, String> {
 
 /// After a forced stop Brave thinks it crashed: next start it offers to restore
 /// the old tabs and asks about crash reports. Marking the exit as clean avoids both.
+/// The window a profile last had (its place, size, maximised), as the browser saved it.
+pub fn window_placement(user_data_dir: &Path) -> Option<Value> {
+    let t = fs::read_to_string(user_data_dir.join("Default").join("Preferences")).ok()?;
+    let v: Value = serde_json::from_str(&t).ok()?;
+    let p = v.get("browser")?.get("window_placement")?.clone();
+    p.is_object().then_some(p)
+}
+
+/// Puts back the window a profile had before a start with no window (owner, Nov 20 2026: windows
+/// opened small, about 780 x 580, after every update). A browser started with no window saves its
+/// invisible 800 x 600 window as the profile's last one, and the next real start used that size.
+pub fn put_back_window_placement(user_data_dir: &Path, before: Option<Value>) {
+    let file = user_data_dir.join("Default").join("Preferences");
+    let Ok(t) = fs::read_to_string(&file) else { return };
+    let Ok(mut v) = serde_json::from_str::<Value>(&t) else { return };
+    if v.get("browser").and_then(|b| b.get("window_placement")) == before.as_ref() {
+        return;
+    }
+    let Some(browser) = v.get_mut("browser").and_then(Value::as_object_mut) else { return };
+    match before {
+        Some(p) => {
+            browser.insert("window_placement".into(), p);
+        }
+        None => {
+            browser.remove("window_placement");
+        }
+    }
+    if let Ok(text) = serde_json::to_string(&v) {
+        let _ = fs::write(&file, text);
+    }
+}
+
+/// A saved window that a start with no window left: its screen is the 800 x 600 one.
+pub fn placement_is_from_hidden_start(p: &Value) -> bool {
+    p["work_area_right"].as_i64().unwrap_or(0) <= 800 && p["work_area_bottom"].as_i64().unwrap_or(0) <= 600
+}
+
+/// Stops a browser with ALL its windows at once, so every window comes back at its next start.
+/// A polite close (`taskkill /PID`, a click on each close button) closes the windows one by one:
+/// the browser moves each but the last to Recently closed and brings back only the last (owner,
+/// Nov 16 2026: Personal's 17-tab window was lost at a restart). The browser saves its windows a
+/// few seconds after each change, so it gets 3 s to settle, then stops as one, and the exit is
+/// marked clean (no "restore pages?" question).
+pub fn stop_whole_browser(pid: u32, user_data_dir: &Path) {
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    crate::procs::kill_tree(pid);
+    for _ in 0..40 {
+        if !crate::procs::is_running(pid) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let _ = mark_clean_exit(user_data_dir);
+}
+
 pub fn mark_clean_exit(user_data_dir: &Path) -> io::Result<()> {
     let prefs = user_data_dir.join("Default").join("Preferences");
     if !prefs.is_file() {
@@ -597,6 +911,12 @@ pub fn build_args(
             disable.push(LOAD_EXTENSION_GATE);
         }
     }
+    // A tab put to sleep keeps its id (owner, Nov 20 2026: Claude in Chrome lost its tabs, whose
+    // ids changed when they slept). Checked on Brave 1.99.57: without it the id changes and the
+    // old one is gone; with it the same id, and the tab wakes by it.
+    if !enable.iter().any(|e| e.split(',').any(|f| f == "WebContentsDiscard")) {
+        enable.push("WebContentsDiscard");
+    }
     if !enable.is_empty() {
         args.push(format!("--enable-features={}", enable.join(",")));
     }
@@ -621,11 +941,11 @@ mod tests {
     fn the_launch_theme_is_written_and_read_back() {
         let dir = temp_dir("launchinfo");
         assert_eq!(read_launch_theme(&dir), None);
-        write_launch_info(&dir, Some("burgundy-dark"), false, true).unwrap();
+        write_launch_info(&dir, Some("burgundy-dark"), false, true, true).unwrap();
         assert!(read_launch_welcome(&dir));
         assert_eq!(read_launch_theme(&dir).as_deref(), Some("burgundy-dark"));
         assert!(!read_launch_freeze(&dir));
-        write_launch_info(&dir, None, true, false).unwrap();
+        write_launch_info(&dir, None, true, false, false).unwrap();
         assert!(!read_launch_force_dark(&dir));
         note_force_dark(&dir, true).unwrap();
         assert!(read_launch_force_dark(&dir));
@@ -793,7 +1113,7 @@ mod tests {
         let args = build_args(Some(Path::new(r"C:\x y")), Some("Profile 1"), Some(9333), &preset, &["--b".into()]);
         assert_eq!(
             args,
-            vec![r"--user-data-dir=C:\x y", "--profile-directory=Profile 1", "--remote-debugging-port=9333", "--a", "--b"]
+            vec![r"--user-data-dir=C:\x y", "--profile-directory=Profile 1", "--remote-debugging-port=9333", "--a", "--b", "--enable-features=WebContentsDiscard"]
         );
         assert!(builtin("nope").is_none());
     }
@@ -806,7 +1126,7 @@ mod tests {
         let args = build_args(None, None, None, &preset, &extra);
         assert_eq!(args.iter().filter(|a| a.starts_with("--enable-features=")).count(), 1);
         assert_eq!(args.iter().filter(|a| a.starts_with("--disable-features=")).count(), 1);
-        assert!(args.contains(&format!("{FREEZE_SWITCH},X,Y")));
+        assert!(args.contains(&format!("{FREEZE_SWITCH},X,Y,WebContentsDiscard")));
         assert!(args.contains(&"--disable-features=A,B".to_string()));
         // No preset makes tabs of one site share a page process.
         assert!(args.contains(&"about:blank".to_string()));
@@ -823,12 +1143,14 @@ mod tests {
         let args = build_args(None, None, None, &preset, &[]);
         assert_eq!(args, vec![
             r"--load-extension=C:\g	heme\dark,C:\g\extension",
+            "--enable-features=WebContentsDiscard",
             "--disable-features=DisableLoadExtensionCommandLineSwitch",
         ]);
         let extra = vec!["--disable-features=X,DisableLoadExtensionCommandLineSwitch".to_string()];
         let args = build_args(None, None, None, &preset, &extra);
-        assert_eq!(args[1], "--disable-features=X,DisableLoadExtensionCommandLineSwitch");
-    }
+        assert_eq!(args[2], "--disable-features=X,DisableLoadExtensionCommandLineSwitch");
+    }
+
 
     #[test]
     fn our_button_is_pinned_last_and_other_pins_stay() {

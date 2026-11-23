@@ -13,6 +13,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub struct Options {
+    /// Continuing an earlier run of this same download (its part at `out` is its own).
+    pub resume: bool,
     pub urls: Vec<String>,
     pub out: Option<PathBuf>,
     pub dir: PathBuf,
@@ -520,16 +522,40 @@ fn load_state(part: &Path, size: u64, tag: &str) -> Option<VecDeque<(u64, u64)>>
     Some(out)
 }
 
+/// Windows' "this came from the internet" mark (Mark of the Web, the Zone.Identifier stream) on
+/// a finished file, as browsers write it: Windows and Office then warn before running or opening
+/// it with full rights (review 2, 2.2: our downloads had none).
+fn mark_from_web(file: &Path, url: Option<&str>) {
+    #[cfg(windows)]
+    {
+        let mut stream = file.as_os_str().to_owned();
+        stream.push(":Zone.Identifier");
+        // Only the site's own address, never a signed link's query (it may hold a token).
+        let host = url.and_then(|u| u.split(['?', '#']).next()).unwrap_or("");
+        let text = if host.starts_with("http") { format!("[ZoneTransfer]
+ZoneId=3
+HostUrl={host}
+") } else { "[ZoneTransfer]
+ZoneId=3
+".to_owned() };
+        let _ = fs::write(PathBuf::from(stream), text);
+    }
+    #[cfg(not(windows))]
+    let _ = (file, url);
+}
+
 fn free_name(dir: &Path, name: &str) -> PathBuf {
+    // Taken: the file, or an unfinished download of that name.
+    let taken = |p: &Path| p.exists() || { let mut q = p.as_os_str().to_owned(); q.push(".part"); Path::new(&q).exists() };
     let first = dir.join(name);
-    if !first.exists() {
+    if !taken(&first) {
         return first;
     }
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) if !s.is_empty() => (s.to_owned(), format!(".{e}")),
         _ => (name.to_owned(), String::new()),
     };
-    (1..10_000).map(|i| dir.join(format!("{stem} ({i}){ext}"))).find(|p| !p.exists()).unwrap_or(first)
+    (1..10_000).map(|i| dir.join(format!("{stem} ({i}){ext}"))).find(|p| !taken(p)).unwrap_or(first)
 }
 
 fn report(o: &Options, value: serde_json::Value, plain: impl FnOnce() -> String) {
@@ -588,9 +614,34 @@ pub fn download(o: &Options) -> Result<Done, String> {
 
     fs::create_dir_all(&o.dir).map_err(|e| format!("{}: {e}", o.dir.display()))?;
     let target = match &o.out {
-        Some(p) if p.is_absolute() => p.clone(),
-        Some(p) => o.dir.join(p),
-        None => free_name(&o.dir, &name),
+        Some(p) => {
+            let t = if p.is_absolute() { p.clone() } else { o.dir.join(p) };
+            // A name given by the browser is a wish, not a licence to overwrite: a finished file
+            // of that name is never replaced, and an unfinished one is continued only if it is
+            // this same download (same size and server tag); otherwise a free name is taken
+            // (review 2, P0 2.1: a download replaced a file, two shared one .part).
+            let mut part = t.as_os_str().to_owned();
+            part.push(".part");
+            let part = PathBuf::from(part);
+            let same_download = part.exists() && (o.resume || size.is_some_and(|sz| load_state(&part, sz, &tag).is_some()));
+            if t.exists() || (part.exists() && !same_download) {
+                let dir = t.parent().map(Path::to_path_buf).unwrap_or_else(|| o.dir.clone());
+                let file = t.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or(name.clone());
+                free_name(&dir, &file)
+            } else {
+                t
+            }
+        }
+        None => {
+            // A paused download resumes under its own name: its unfinished part is this download's
+            // (same size and tag, or no state to tell otherwise) (review 3, A2).
+            let own = o.dir.join(&name);
+            let mut part = own.as_os_str().to_owned();
+            part.push(".part");
+            let part = PathBuf::from(part);
+            let mine = part.exists() && !own.exists() && size.is_some_and(|sz| load_state(&part, sz, &tag).is_some());
+            if mine { own } else { free_name(&o.dir, &name) }
+        }
     };
     let mut part = target.as_os_str().to_owned();
     part.push(".part");
@@ -626,6 +677,7 @@ pub fn download(o: &Options) -> Result<Done, String> {
         }
         drop(file);
         fs::rename(&part, &target).map_err(|e| e.to_string())?;
+        mark_from_web(&target, o.urls.first().map(String::as_str));
         return Ok(Done { path: target, bytes: total, seconds: started.elapsed().as_secs_f64(), connections: 1 });
     }
 
@@ -785,5 +837,6 @@ pub fn download(o: &Options) -> Result<Done, String> {
     drop(file);
     let _ = fs::remove_file(state_file(&part));
     fs::rename(&part, &target).map_err(|e| format!("could not name the finished file: {e}"))?;
+    mark_from_web(&target, o.urls.first().map(String::as_str));
     Ok(Done { path: target, bytes: size, seconds: started.elapsed().as_secs_f64(), connections: peak })
 }

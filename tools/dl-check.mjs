@@ -157,7 +157,7 @@ check('an address that is neither web, magnet nor torrent is refused', r.code ==
 
 server.close();
 other.close();
-rmSync(dir, { recursive: true, force: true });
-for (const h of homes) rmSync(h, { recursive: true, force: true });
+rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+for (const h of homes) rmSync(h, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

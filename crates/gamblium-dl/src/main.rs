@@ -27,6 +27,11 @@ struct Args {
     /// File name to save as (default: the server's name for it).
     #[arg(short, long)]
     out: Option<PathBuf>,
+    /// This continues an earlier run of the same download: its unfinished part at `--out` is
+    /// its own (Gamblium passes it on Resume). Without it an unfinished part of that name is
+    /// someone else's and a free name is taken.
+    #[arg(long)]
+    resume: bool,
     /// Folder to save into (default: the current folder).
     #[arg(short, long, default_value = ".")]
     dir: PathBuf,
@@ -133,7 +138,7 @@ fn main() {
         let (_, c) = headers.remove(i);
         cookies.extend(cookies_from(&c, a.urls.first().map(String::as_str).unwrap_or("")));
     }
-    let o = http::Options { urls: a.urls, out: a.out, dir: a.dir, max_connections: a.max_connections.clamp(1, 32), headers, cookies, json: a.json, quiet: a.quiet, status_details: a.status_file.is_some(), start_connections: a.start_connections.clamp(1, 16), too_slow: None, give_up_after: std::time::Duration::from_secs(a.give_up_after.max(1)) };
+    let o = http::Options { resume: a.resume, urls: a.urls, out: a.out, dir: a.dir, max_connections: a.max_connections.clamp(1, 32), headers, cookies, json: a.json, quiet: a.quiet, status_details: a.status_file.is_some(), start_connections: a.start_connections.clamp(1, 16), too_slow: None, give_up_after: std::time::Duration::from_secs(a.give_up_after.max(1)) };
     let seed_minutes = a.seed_minutes.min(24 * 60);
     let result = if as_torrent { torrent::download(&o, seed_minutes, !a.no_web_seed) } else { http::download(&o) };
     match result {

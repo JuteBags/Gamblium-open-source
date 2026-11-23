@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>PDF · Gamblium</title>
+<link rel="icon" href="../ui/icons/icon-32.png">
+<link rel="stylesheet" href="../ui/tokens.css">
+<link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+<header class="top">
+  <div class="doc">
+    <svg class="docicon" viewBox="0 0 20 20" aria-hidden="true"><path d="M5 2.5h6.5L15 6v11.5H5z M11.5 2.5V6H15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+    <span id="docName" class="docname">PDF</span>
+    <span id="dirty" class="dirty" hidden title="Changed: download to keep it">Edited</span>
+  </div>
+  <div class="nav" id="navBar">
+    <button class="ib" id="prev" title="Previous page" aria-label="Previous page"><svg viewBox="0 0 20 20"><path d="M12 5l-5 5 5 5"/></svg></button>
+    <input id="pageNo" class="pageno num" value="1" aria-label="Page number" inputmode="numeric"><span class="of num" id="pageOf">/ 1</span>
+    <button class="ib" id="next" title="Next page" aria-label="Next page"><svg viewBox="0 0 20 20"><path d="M8 5l5 5-5 5"/></svg></button>
+    <span class="sep"></span>
+    <button class="ib" id="zoomOut" title="Zoom out" aria-label="Zoom out"><svg viewBox="0 0 20 20"><path d="M5 10h10"/></svg></button>
+    <button id="zoomLabel" class="zoom num" title="Fit to width">100%</button>
+    <button class="ib" id="zoomIn" title="Zoom in" aria-label="Zoom in"><svg viewBox="0 0 20 20"><path d="M5 10h10M10 5v10"/></svg></button>
+  </div>
+  <div class="acts">
+    <div class="search" role="search">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5"/><path d="M13 13l4 4"/></svg>
+      <input id="find" type="search" placeholder="Search in the PDF" aria-label="Search in the PDF" autocomplete="off" spellcheck="false">
+      <span id="findCount" class="num findcount"></span>
+    </div>
+    <button class="ib" id="undo" title="Undo (Ctrl+Z)" aria-label="Undo" disabled><svg viewBox="0 0 20 20"><path d="M7.5 6L4 9.5 7.5 13M4.5 9.5H12a4 4 0 0 1 0 8h-2"/></svg></button>
+    <button class="ib" id="redo" title="Redo (Ctrl+Y)" aria-label="Redo" disabled><svg viewBox="0 0 20 20"><path d="M12.5 6L16 9.5 12.5 13M15.5 9.5H8a4 4 0 0 0 0 8h2"/></svg></button>
+    <button class="ib" id="print" title="Print" aria-label="Print"><svg viewBox="0 0 20 20"><path d="M6 8V3h8v5M6 14H4V8h12v6h-2M6 11h8v6H6z"/></svg></button>
+    <button class="primary" id="download" title="Download this PDF (with your changes)"><svg viewBox="0 0 20 20"><path d="M10 3v9M6.5 8.5L10 12l3.5-3.5M4 16h12"/></svg><span>Download</span></button>
+  </div>
+</header>
+
+<nav class="rail" aria-label="Tools">
+  <button class="tool" data-tool="view" aria-pressed="true"><svg viewBox="0 0 20 20"><path d="M2.5 10s3-5.5 7.5-5.5S17.5 10 17.5 10 14.5 15.5 10 15.5 2.5 10 2.5 10z"/><circle cx="10" cy="10" r="2.2"/></svg><span>Read</span></button>
+  <button class="tool" data-tool="organize"><svg viewBox="0 0 20 20"><path d="M3 3h6v6H3zM11 3h6v6h-6zM3 11h6v6H3zM11 11h6v6h-6z"/></svg><span>Organize</span></button>
+  <span class="railsep"></span>
+  <button class="tool t-amber" data-tool="highlight"><svg viewBox="0 0 20 20"><path d="M4 16h12M6 13l7-8 3 3-8 7H6z"/></svg><span>Highlight</span></button>
+  <button class="tool t-blue" data-tool="draw"><svg viewBox="0 0 20 20"><path d="M3 15c3-6 5 2 8-4s4-5 6-3"/></svg><span>Draw</span></button>
+  <button class="tool t-blue" data-tool="text"><svg viewBox="0 0 20 20"><path d="M5 5h10M10 5v11M7.5 16h5"/></svg><span>Add text</span></button>
+  <button class="tool t-blue" data-tool="edit"><svg viewBox="0 0 20 20"><path d="M4 16h3l8.5-8.5-3-3L4 13zM11 6l3 3"/></svg><span>Edit text</span></button>
+  <button class="tool t-green" data-tool="form"><svg viewBox="0 0 20 20"><path d="M4 3h12v14H4zM7 7h6M7 10.500h6M7 14l1.500 1.500L11 13"/></svg><span>Fill form</span></button>
+  <button class="tool t-blue" data-tool="arrange"><svg viewBox="0 0 20 20"><path d="M4 4h7v7H4z M13 9v6h-6 M15 13l2 2-2 2 M17 15h-4"/></svg><span>Arrange</span></button>
+  <button class="tool t-red" data-tool="redact" title="Redact: black out text for good"><svg viewBox="0 0 20 20"><path d="M3 6h14v8H3z" fill="currentColor"/><path d="M5 17h10" stroke-dasharray="2 2"/></svg><span>Redact</span></button>
+  <button class="tool t-green" data-tool="sign"><svg viewBox="0 0 20 20"><path d="M3 14c2-1 3-7 5-7s0 6 2 6 2-3 3-3 1 2 4 2M3 17h14"/></svg><span>Sign</span></button>
+  <span class="railsep"></span>
+  <button class="tool" data-act="watermark"><svg viewBox="0 0 20 20"><path d="M10 2.5s5 5.5 5 9a5 5 0 0 1-10 0c0-3.5 5-9 5-9z"/></svg><span>Watermark</span></button>
+  <button class="tool" data-act="merge"><svg viewBox="0 0 20 20"><path d="M4 3h7v5H4zM9 12h7v5H9zM7.5 8v2.5a1.500 1.500 0 0 0 1.500 1.500"/></svg><span>Merge</span></button>
+  <button class="tool" data-act="protect"><svg viewBox="0 0 20 20"><path d="M5 9h10v8H5zM7 9V6.500a3 3 0 0 1 6 0V9M10 12v2"/></svg><span>Protect</span></button>
+  <button class="tool" data-act="compress"><svg viewBox="0 0 20 20"><path d="M10 3v5M7.500 5.500 10 8l2.500-2.500M10 17v-5M7.500 14.500 10 12l2.500 2.500M4 10h12"/></svg><span>Compress</span></button>
+  <button class="tool" data-act="images"><svg viewBox="0 0 20 20"><path d="M3 4h14v12H3zM3 13l4-4 3 3 2-2 5 5"/><circle cx="13" cy="7.5" r="1.3"/></svg><span>Images</span></button>
+  <button class="tool" data-act="open"><svg viewBox="0 0 20 20"><path d="M3 6h5l1.5 2H17v8H3z"/></svg><span>Open</span></button>
+</nav>
+
+<div class="toolbar" id="toolHint" hidden></div>
+
+<aside class="thumbs" id="thumbs" aria-label="Pages"></aside>
+
+<main class="stage" id="stage">
+  <section class="start" id="start" hidden>
+    <img class="startmark" src="../ui/icons/icon-128.png" alt="" width="56" height="56">
+    <h1>Gamblium PDF</h1>
+    <p>Read, sign, mark up and rearrange PDFs right here. Nothing leaves this computer.</p>
+    <div class="startacts">
+      <button class="primary big" data-act="open">Open a PDF</button>
+      <button class="big" data-act="merge0">Merge PDFs</button>
+      <button class="big" data-act="images">Images to PDF</button>
+    </div>
+    <p class="drop">or drop files anywhere</p>
+  </section>
+  <div class="pages" id="pages"></div>
+  <div class="grid" id="grid" hidden></div>
+</main>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<dialog id="signDlg" class="dlg">
+  <form method="dialog">
+    <h2>Your signature</h2>
+    <div class="seg" id="signMode"><button type="button" data-m="draw" aria-pressed="true">Draw</button><button type="button" data-m="type" aria-pressed="false">Type</button></div>
+    <canvas id="signPad" width="560" height="180"></canvas>
+    <input id="signName" placeholder="Type your name" hidden autocomplete="name">
+    <div class="dlgacts"><button type="button" id="signClear" class="quiet">Clear</button><span class="grow"></span><button value="cancel" class="quiet">Cancel</button><button value="ok" id="signOk" class="primary">Place it</button></div>
+  </form>
+</dialog>
+
+<dialog id="pwDlg" class="dlg">
+  <form method="dialog">
+    <h2>This PDF is locked</h2>
+    <p class="dlgnote">Type its password to open it. It stays on this computer.</p>
+    <label>Password <input id="pdfPw" type="password" autocomplete="off"></label>
+    <p id="pwBad" class="dlgbad" hidden>That password is not right.</p>
+    <div class="dlgacts"><span class="grow"></span><button value="cancel" class="quiet">Cancel</button><button value="ok" class="primary">Open</button></div>
+  </form>
+</dialog>
+
+<dialog id="lockDlg" class="dlg">
+  <form method="dialog">
+    <h2>Lock with a password</h2>
+    <p class="dlgnote">Saves a copy that opens only with this password (AES-256). Keep it safe: nobody can open the copy without it.</p>
+    <label>Password <input id="lockPw" type="password" autocomplete="new-password" minlength="4"></label>
+    <label>Again <input id="lockPw2" type="password" autocomplete="new-password"></label>
+    <p id="lockBad" class="dlgbad" hidden></p>
+    <div class="dlgacts"><span class="grow"></span><button value="cancel" class="quiet">Cancel</button><button value="ok" id="lockOk" class="primary">Save locked copy</button></div>
+  </form>
+</dialog>
+
+<dialog id="wmDlg" class="dlg">
+  <form method="dialog">
+    <h2>Watermark every page</h2>
+    <label>Text <input id="wmText" value="CONFIDENTIAL" maxlength="40"></label>
+    <label>See-through <input id="wmAlpha" type="range" min="5" max="60" value="18"></label>
+    <div class="swatches" id="wmColour"><button type="button" data-c="0.80,0.12,0.12" aria-pressed="true" style="--c:#cc1f1f"></button><button type="button" data-c="0.12,0.30,0.70" aria-pressed="false" style="--c:#1f4db3"></button><button type="button" data-c="0.35,0.35,0.38" aria-pressed="false" style="--c:#595961"></button></div>
+    <div class="dlgacts"><span class="grow"></span><button value="cancel" class="quiet">Cancel</button><button value="ok" class="primary">Add watermark</button></div>
+  </form>
+</dialog>
+
+<input type="file" id="pickPdf" accept="application/pdf,.pdf" multiple hidden>
+<input type="file" id="pickImg" accept="image/*" multiple hidden>
+<div id="printArea" aria-hidden="true"></div>
+<script type="module" src="viewer.js"></script>
+</body>
+</html>

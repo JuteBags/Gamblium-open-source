@@ -87,13 +87,15 @@ export function statusLine(status) {
 export const WIDGETS = [
   { id: 'clock', label: 'Greeting and clock', hint: 'The time, the date and a hello.', on: true },
   { id: 'pins', label: 'Quick access', hint: 'Sites you pinned, in your order.', on: true },
-  { id: 'top', label: 'Most visited', hint: 'What you open most, from this browser.', on: true },
+  // The default cards, first to third (owner, Nov 16 2026): Recently closed, Right now, Recent sessions.
   { id: 'closed', label: 'Recently closed', hint: 'Tabs and windows you can bring back.', on: true },
   { id: 'status', label: 'Right now', hint: 'Tabs open, tabs asleep, memory in use.', on: true },
-  { id: 'sessions', label: 'Saved sessions', hint: 'Sets of tabs you saved.', on: false },
+  { id: 'browsers', label: 'Recent sessions', hint: 'Personal, Work and your other sessions: go to one, or start it.', on: true },
+  { id: 'top', label: 'Most visited', hint: 'What you open most, from this browser.', on: false },
+  { id: 'sessions', label: 'Saved tab sets', hint: 'Sets of tabs you saved.', on: false },
   { id: 'downloads', label: 'Downloads', hint: 'The last few files.', on: false },
-  { id: 'notes', label: 'Notes', hint: 'A few lines kept on this computer.', on: false },
-  { id: 'todo', label: 'To do', hint: 'A short list you can tick off.', on: false },
+  { id: 'notes', label: 'Notes', hint: 'A few lines kept on this computer.', on: true },
+  { id: 'todo', label: 'To do', hint: 'A short list you can tick off.', on: true },
   { id: 'playing', label: 'Playing now', hint: 'Tabs making sound: go to them, or mute them.', on: false },
   { id: 'heavy', label: 'Heaviest tabs', hint: 'The tabs using the most memory, with a sleep button.', on: false },
   { id: 'recent', label: 'Recently visited', hint: 'The last pages you opened.', on: false },
@@ -111,8 +113,12 @@ export const MAX_H = 2; // and 1 or 2 rows tall
  * `pack` (on unless switched off): a card slides up into a gap left beside a bigger one.
  * Unknown cards are dropped, missing ones go to the end in their usual order, sizes are kept in range.
  */
+/** The layout a new page starts with (owner, Nov 16 2026): Recently closed, Right now, Recent
+ *  sessions; then Notes, two columns wide, and To do. */
+export const DEFAULT_LAYOUT = { order: ['closed', 'status', 'browsers', 'notes', 'todo'], size: { notes: { w: 2, h: 1 } }, pack: true };
+
 export function readLayout(raw) {
-  const r = raw && typeof raw === 'object' ? raw : {};
+  const r = raw && typeof raw === 'object' ? raw : DEFAULT_LAYOUT;
   const order = [];
   for (const id of Array.isArray(r.order) ? r.order : []) if (CARDS.includes(id) && !order.includes(id)) order.push(id);
   for (const id of CARDS) if (!order.includes(id)) order.push(id);
@@ -221,9 +227,18 @@ export function readPrefs(raw) {
   }
   const widgets = {};
   for (const w of WIDGETS) widgets[w.id] = typeof r.widgets?.[w.id] === 'boolean' ? r.widgets[w.id] : w.on;
+  // Once, for pages set up before Recent sessions (owner, Nov 16 2026): sessions in, Most visited out.
+  if (!r.sessionDeck) {
+    widgets.browsers = true;
+    widgets.top = false;
+  }
+  // Saved tab sets are off (owner, Nov 16 2026: a session keeps its tabs already).
+  if (!r.noTabSets) widgets.sessions = false;
   return {
     pins,
     widgets,
+    sessionDeck: true,
+    noTabSets: true,
     layout: readLayout(r.layout),
     backdrop: BACKDROPS.includes(r.backdrop) ? r.backdrop : 'moon',
     name: String(r.name ?? '').trim().slice(0, 30),

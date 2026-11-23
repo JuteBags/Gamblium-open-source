@@ -38,7 +38,34 @@ pub fn save(state: &Value) -> Result<(), String> {
     if let Some(dir) = f.parent() {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    fs::write(f, serde_json::to_string_pretty(state).unwrap()).map_err(|e| e.to_string())
+    // Merged with the file as it is now: an answer the owner saved since this copy was loaded
+    // (the newer answeredAt wins) is not undone by a question saved at the same moment, and
+    // questions from both are kept (review 9, G18).
+    let disk = load();
+    let mut out = state.clone();
+    if let (Some(o), Some(d)) = (out.as_object_mut(), disk.as_object()) {
+        for (k, v) in d {
+            if k == "asks" {
+                continue;
+            }
+            let newer = v["answeredAt"].as_u64().unwrap_or(0) > o.get(k).and_then(|x| x["answeredAt"].as_u64()).unwrap_or(0);
+            if newer {
+                o.insert(k.clone(), v.clone());
+            }
+        }
+        let mut asks: Vec<Value> = o.get("asks").and_then(Value::as_array).cloned().unwrap_or_default();
+        for a in d.get("asks").and_then(Value::as_array).into_iter().flatten() {
+            let same = |b: &Value| b["what"] == a["what"] && b["command"] == a["command"] && b["profile"] == a["profile"];
+            let answered = o.get(a["what"].as_str().unwrap_or("")).and_then(|x| x["answeredAt"].as_u64()).unwrap_or(0) >= a["at"].as_u64().unwrap_or(0);
+            if !asks.iter().any(same) && !answered {
+                asks.push(a.clone());
+            }
+        }
+        o.insert("asks".into(), json!(asks));
+    }
+    let tmp = f.with_extension("json.tmp");
+    fs::write(&tmp, serde_json::to_string_pretty(&out).unwrap()).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &f).map_err(|e| e.to_string())
 }
 
 pub fn now() -> u64 {
@@ -47,7 +74,9 @@ pub fn now() -> u64 {
 
 fn known(what: &str) -> Result<(), String> {
     // settings: agents changing settings; logins: agents using the owner's saved logins.
-    if matches!(what, "settings" | "logins") { Ok(()) } else { Err(format!("there is no permission called '{what}'")) }
+    // person: agents working in a person's own session window, Work (review 6, D2).
+    // logins:<site>|<profile>: one site's saved logins for one browser (review 2, 1.6).
+    if matches!(what, "settings" | "logins" | "person") || (what.starts_with("logins:") && what.len() <= 300 && !what.chars().any(char::is_control)) { Ok(()) } else { Err(format!("there is no permission called '{what}'")) }
 }
 
 pub fn allowed(state: &Value, what: &str, now: u64) -> bool {

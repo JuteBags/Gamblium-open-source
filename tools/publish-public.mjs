@@ -14,7 +14,8 @@ import { pathToFileURL } from 'node:url';
 const PUBLIC = 'https://github.com/JuteBags/Gamblium-open-source.git';
 const AUTHOR = 'IsNoobgrammer <112808251+IsNoobgrammer@users.noreply.github.com>'; // GitHub noreply, not a mailbox
 // Files the development repository may hold that are not for the public one.
-export const PRIVATE = ['docs/KT-design-agent.md', 'CLAUDE.md', 'TASK.md', '.claude', '.env'];
+// The review notes name the owner's organisation and list security findings: not public.
+export const PRIVATE = ['docs/KT-design-agent.md', 'docs/review-2026-11-16.md', 'CLAUDE.md', 'TASK.md', '.claude', '.env'];
 // Never published, whatever the path: a private key, an env file or a certificate.
 export const FORBIDDEN_NAME = /(^|\/)(\.env(\..*)?|.*\.(pem|pfx|p12|key))$/i;
 export const FORBIDDEN_TEXT = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
@@ -71,7 +72,7 @@ async function main() {
     git(tmp, 'push', '-q', 'origin', 'HEAD:main');
     console.log(`Published: ${git(tmp, 'log', '--oneline', '-1')}`);
   } finally {
-    rmSync(tmp, { recursive: true, force: true });
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
   }
 }
 

@@ -4,6 +4,8 @@ import {
 } from "./rules.js";
 import { DOWNLOAD_DEFAULTS, OWN_DEFAULTS, isBrowserDownloadsPage, isTorrent, routedFilename, splitPath, stayReason } from "./download-rules.js";
 import { showDownloadCard } from "./dl-card.js";
+import { pipMain, pipCloseMain } from "./pipwin.js";
+import { lyricsControl, lyricsWatch, ytCaptionLines, ytChapters } from "./lyrics.js";
 import { bangRules, bangTarget, coveredByRules } from "./bangs.js";
 import { linkColours, beforeDarkening } from "./darklinks.js";
 import { CODE_STAMP } from "./code-stamp.js";
@@ -19,19 +21,31 @@ import { CODE_STAMP } from "./code-stamp.js";
   try {
     const text = await fetch(chrome.runtime.getURL("code-stamp.js"), { cache: "no-store" }).then((r) => r.text());
     const onDisk = /CODE_STAMP\s*=\s*"([^"]*)"/.exec(text)?.[1];
-    if (!onDisk || onDisk === CODE_STAMP) return;
+    // Running the code on disk: the launcher is told (codestamp.rs), so after the next install it
+    // can take the new code in a hidden start before the window opens.
+    if (onDisk && onDisk === CODE_STAMP) return void native({ type: "code-stamp", stamp: CODE_STAMP }).catch(() => {});
+    if (!onDisk) return;
     const { codeReloadFor } = await chrome.storage.local.get({ codeReloadFor: null });
     if (codeReloadFor === onDisk) return;
     await chrome.storage.local.set({ codeReloadFor: onDisk, codeReloadFrom: CODE_STAMP });
     // The helper's restart closes the browser 0.7 s after it answers; the reload goes first.
-    await native({ type: "restart" }).catch(() => null);
+    // Only with the restart promised: Chromium 158 (Brave 1.100) switches off an extension loaded
+    // from a folder when it reloads itself, until the browser starts again through the launcher.
+    // With no helper to restart (owner, Nov 20 2026: Defender had stopped it), the reload left Work
+    // without Gamblium for hours. So no answer, no reload: tried again at the worker's next start.
+    const r = await native({ type: "restart" }).catch(() => null);
+    // { restarting: true }, or { prestart: true } in the launcher's hidden start (closed by it).
+    if (!r || r.ok === false || !(r.restarting || r.prestart)) {
+      await chrome.storage.local.remove(["codeReloadFor", "codeReloadFrom"]);
+      return;
+    }
     chrome.runtime.reload();
   } catch { /* nothing to compare: carry on */ }
 })();
 import { applyEvent, emptyState, listRecords, toCurl } from "./capture.js";
 import {
   capturePage, cleanName, isValidSession, placement, restorePage, snapshot, summaries, withSession, withoutSession,
-  findInSessions, sessionsByUrl,
+  findInSessions, sessionsByUrl, matchSession,
 } from "./sessions.js";
 import { attribute, proxyConfig, proxySummary, groupTotals, groupLimitPlan, withGroupIcon, splitGroupIcon } from "./tabstats.js";
 import { adoptIds, emptyIdMaps, firstId, makeCtl, noteReplaced } from "./agent.js";
@@ -74,11 +88,11 @@ async function check(timed = false) {
   checkIsTimed = timed;
   // The browser runs this extension's process at idle priority; the helper
   // raises it, at start and once a minute in case the browser resets it.
-  if (!timed) native({ type: "lift-extension" });
+  if (!timed) { liftSoon(); mirrorIfPending(); }
   const s = await settings();
   const tabs = await allTabs();
   const now = Date.now();
-  const ctx = { awakeTabs: await awakeTabs(), busyTabs: [...new Set([...busyTabs(), ...(await pageDownloadTabs(tabs))])], domReady: Object.fromEntries(domReady) };
+  const ctx = { pipTabs: await videoOutTabs(tabs), awakeTabs: await awakeTabs(), busyTabs: [...new Set([...busyTabs(), ...(await pageDownloadTabs(tabs))])], domReady: Object.fromEntries(domReady) };
   // In an agent's browser "hidden" means: the agent has left the tab alone.
   if (IS_AGENT_BUILD) {
     const { agentTouched } = await chrome.storage.session.get({ agentTouched: {} });
@@ -93,6 +107,10 @@ async function check(timed = false) {
     s.freezeDelaySec = Math.max(s.freezeDelaySec, AGENT_IDLE_SEC);
   }
   await syncLaunchScheme();
+  if (!IS_AGENT_BUILD && (await automationActive())) {
+    await freezeLog({ ran: false, why: "another program is driving this browser (a debugger is attached to a tab): no freezing or sleeping until 10 minutes after it lets go" });
+    return 0;
+  }
   await freezeCheck(tabs, s, now, ctx);
   planFreeze();
   loadNext();
@@ -288,8 +306,41 @@ function trackUpload(kind, d) {
   } else if (kind === "completed" || kind === "error") uploads.delete(d.requestId);
 }
 
+// Another program driving this browser (Claude in Chrome, Playwright, DevTools: anything holding a
+// debugger on a tab): no freezing and no putting tabs to sleep until 10 minutes after it was last
+// seen (owner, Nov 16 2026: an agent in Claude in Chrome lost its tabs, whose ids changed when they
+// slept, and could not read frozen pages). Ours attaches for one command only; one seen during
+// that moment only pauses the freezer briefly.
+const AUTOMATION_HOLD_MS = 10 * 60 * 1000;
+async function automationActive() {
+  const now = Date.now();
+  let seen = false;
+  if (chrome.debugger && chrome.debugger.getTargets) {
+    const targets = await chrome.debugger.getTargets().catch(() => []);
+    seen = targets.some((t) => t.attached && t.type === "page" && typeof t.tabId === "number" && !ourAttach.has(t.tabId));
+  }
+  if (seen) {
+    await chrome.storage.session.set({ automationAt: now }).catch(() => {});
+    return true;
+  }
+  const { automationAt = 0 } = await chrome.storage.session.get({ automationAt: 0 }).catch(() => ({ automationAt: 0 }));
+  return now - automationAt < AUTOMATION_HOLD_MS;
+}
+// Tabs our own freezer or wake is attached to at this moment (not another program).
+const ourAttach = new Set();
+if (chrome.debugger) {
+  const attach = chrome.debugger.attach.bind(chrome.debugger);
+  const detach = chrome.debugger.detach.bind(chrome.debugger);
+  chrome.debugger.attach = (target, version) => {
+    if (target && typeof target.tabId === "number") ourAttach.add(target.tabId);
+    return attach(target, version).catch((e) => { ourAttach.delete(target && target.tabId); throw e; });
+  };
+  chrome.debugger.detach = (target) => detach(target).finally(() => ourAttach.delete(target && target.tabId));
+}
+
 async function freezeAllowed(s) {
   if (!s.freezeEnabled || !chrome.debugger) return false;
+  if (await automationActive()) return false;
   const { launchFreeze } = await chrome.storage.local.get({ launchFreeze: null });
   return launchFreeze === true;
 }
@@ -758,7 +809,8 @@ async function tabLastUrl(id) {
   return urls[firstId(maps, id)] || null;
 }
 chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
-  if (!change.url || tab.discarded || !/^https?:/.test(change.url)) return;
+  if (!change.url || tab.discarded || tab.incognito || !/^https?:/.test(change.url)) return;
+  if (!IS_AGENT_BUILD && !bridgePort) return; // only agents read it (ids across restarts)
   idChain(async () => {
     const maps = (await chrome.storage.session.get({ tabIdMaps: emptyIdMaps() })).tabIdMaps;
     const { tabLastUrl: urls } = await chrome.storage.session.get({ tabLastUrl: {} });
@@ -792,6 +844,14 @@ function hiddenLoading(except) {
 }
 chrome.webNavigation.onCommitted.addListener(async (d) => {
   if (d.frameId !== 0 || IS_AGENT_BUILD || letGo.has(d.tabId) || loadQueue.includes(d.tabId)) return;
+  await browserStart;
+  if (restoring() && !isShown(d.tabId) && !(await automationActive())) {
+    // A tab the browser brings back at its start: asleep until opened, never loaded in turn.
+    await new Promise((r) => setTimeout(r, 300));
+    const t = await chrome.tabs.get(d.tabId).catch(() => null);
+    if (t && !t.active && !t.audible && !t.discarded && tempOf(t, await settings()) < MAX_TEMP) chrome.tabs.discard(d.tabId).catch(() => {});
+    return;
+  }
   if (isShown(d.tabId) || newestInWindow(d.tabId)) return;
   const s = await settings();
   const busy = hiddenLoading(d.tabId);
@@ -801,6 +861,8 @@ chrome.webNavigation.onCommitted.addListener(async (d) => {
   if (isShown(d.tabId) || newestInWindow(d.tabId)) return;
   const tab = await chrome.tabs.get(d.tabId).catch(() => null);
   if (!tab || !holdForLoading(tab, s, hiddenLoading(d.tabId))) return;
+  // A tab another program opened in the background is its own: not held (its id would change).
+  if (await automationActive()) return;
   try {
     // A tab that is put to sleep can come back under a new id.
     const slept = await chrome.tabs.discard(d.tabId);
@@ -851,6 +913,38 @@ async function releaseFromQueue() {
     await chrome.tabs.reload(id).catch(() => {});
   }
 }
+// ---- Restored tabs stay asleep (owner, Nov 16 2026: 17 tabs came back awake, 2 GB, 400% CPU) --
+// A browser that starts brings its tabs back; every hidden one is put to sleep (keeping its address
+// and title) and is NOT loaded in turn: it loads when it is opened. The tab in front of each
+// window, tabs playing sound, and sites set never to sleep (273 K) are left. Looked at a few times
+// in the first seconds, as the browser brings tabs back one by one.
+async function sleepRestored() {
+  if (IS_AGENT_BUILD || (await automationActive())) return;
+  const s = await settings();
+  const tabs = await chrome.tabs.query({}).catch(() => []);
+  for (const t of tabs) {
+    // Out of the load queue first: a queued tab would be loaded in turn (asleep or not).
+    const i = loadQueue.indexOf(t.id);
+    if (i >= 0 && !t.active) loadQueue.splice(i, 1), saveQueue();
+    if (t.active || t.audible || t.discarded) continue;
+    if (!/^https?:/.test(t.url || t.pendingUrl || "")) continue;
+    if (tempOf(t, s) >= MAX_TEMP) continue;
+    chrome.tabs.discard(t.id).catch(() => {});
+  }
+}
+// A browser start, known by its session storage being empty (onStartup does not reach every
+// profile): the moment is kept for the browser's whole run.
+let browserStartAt = 0;
+const browserStart = chrome.storage.session.get({ browserStartAt: 0 }).then(async ({ browserStartAt: at }) => {
+  browserStartAt = at || Date.now();
+  if (!at) {
+    await chrome.storage.session.set({ browserStartAt }).catch(() => {});
+    for (const ms of [0, 1500, 4000, 8000, 15000, 30000]) setTimeout(() => void sleepRestored().catch(() => {}), ms);
+  }
+}).catch(() => {});
+/** In the first 2 minutes of a browser run: tabs the browser brings back, not new ones of the person's. */
+const restoring = () => browserStartAt && Date.now() - browserStartAt < 120000;
+
 chrome.tabs.onUpdated.addListener((id, change, tab) => {
   if (change.status !== "complete" || tab.active) return; // the tab in front costs nothing here
   letGo.delete(id);
@@ -972,6 +1066,14 @@ async function peekRegister() {
   }
 }
 chrome.runtime.onInstalled.addListener(() => peekRegister());
+// A slept video tab comes back where it was (content/resume.js; owner, Nov 23 2026).
+const RESUME_SCRIPT = "gamblium-resume";
+async function resumeRegister() {
+  const have = await chrome.scripting.getRegisteredContentScripts({ ids: [RESUME_SCRIPT] }).catch(() => []);
+  if (!have.length) await chrome.scripting.registerContentScripts([{ id: RESUME_SCRIPT, js: ["content/resume.js"], matches: ["http://*/*", "https://*/*"], runAt: "document_idle", allFrames: false, persistAcrossSessions: true }]).catch(() => {});
+}
+chrome.runtime.onInstalled.addListener(() => resumeRegister());
+chrome.runtime.onStartup.addListener(() => resumeRegister());
 chrome.runtime.onStartup.addListener(() => peekRegister());
 chrome.storage.onChanged.addListener((c, area) => {
   if (area === "local" && c.peekOn) peekRegister();
@@ -1013,6 +1115,37 @@ chrome.tabs.onRemoved.addListener((tabId) => void chrome.declarativeNetRequest.u
 // closes the little window. Settings > Tabs: popOutVideo.
 // The tab each window showed last lives in session storage: the worker sleeps between tab
 // switches, and a map in memory came back empty (owner, Nov 14 2026: no pop-out seen).
+// Tabs whose video is in our pop-out window (review 10, H7): never frozen or put to sleep while it
+// is open, paused or muted too. A tab whose window has gone (closed with its X) leaves the list.
+async function pipTabs(tabs) {
+  const { pipOut = [] } = await chrome.storage.session.get({ pipOut: [] }).catch(() => ({ pipOut: [] }));
+  if (!pipOut.length) return [];
+  const still = [];
+  for (const id of pipOut) {
+    if (!tabs.some((t) => t.id === id)) continue;
+    // At most a second: a page that never answers must not hold up every freeze.
+    const asked = chrome.scripting.executeScript({ target: { tabId: id }, world: "MAIN", func: () => !!(document.pictureInPictureElement || (window.documentPictureInPicture && window.documentPictureInPicture.window)) }).catch(() => [null]);
+    const [r] = await Promise.race([asked, new Promise((ok) => setTimeout(() => ok([null]), 1000))]);
+    // A tab that cannot answer is kept: better awake than its video lost.
+    if (!r || r.result !== false) still.push(id);
+  }
+  if (still.length !== pipOut.length) await chrome.storage.session.set({ pipOut: still }).catch(() => {});
+  return still;
+}
+// Tabs whose video is out of the tab: our pop-out window, or the floating lyrics window, which
+// plays from the tab, paused too (owner, Nov 23 2026: a paused song under the lyrics was put to
+// sleep and came back at 0:00). Neither is frozen or put to sleep.
+async function videoOutTabs(tabs) {
+  const out = await pipTabs(tabs);
+  if (lyricsNow && tabs.some((t) => t.id === lyricsNow.tabId) && !out.includes(lyricsNow.tabId)) out.push(lyricsNow.tabId);
+  return out;
+}
+async function pipOutSet(tabId, out) {
+  const { pipOut = [] } = await chrome.storage.session.get({ pipOut: [] }).catch(() => ({ pipOut: [] }));
+  const next = out ? [...new Set([...pipOut, tabId])] : pipOut.filter((id) => id !== tabId);
+  if (next.length !== pipOut.length) await chrome.storage.session.set({ pipOut: next }).catch(() => {});
+}
+chrome.tabs.onRemoved.addListener((tabId) => void pipOutSet(tabId, false));
 chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
   const key = "lastTab:" + windowId;
   const prev = (await chrome.storage.session.get(key))[key];
@@ -1020,21 +1153,169 @@ chrome.tabs.onActivated.addListener(async ({ tabId, windowId }) => {
   const { popOutVideo = true, launchFreeze = null } = await chrome.storage.local.get({ popOutVideo: true, launchFreeze: null });
   if (!popOutVideo) return;
   // Back to a tab whose video is out: in again.
-  chrome.scripting.executeScript({ target: { tabId }, func: () => { if (document.pictureInPictureElement) document.exitPictureInPicture(); } }).catch(() => {});
+  // In the page's own world: Gamblium's pop-out window lives there (pipwin.js).
+  // Only in a tab whose video we popped out (review 10, H21: no script in every page's world).
+  const { pipOut = [] } = await chrome.storage.session.get({ pipOut: [] }).catch(() => ({ pipOut: [] }));
+  if (pipOut.includes(tabId)) {
+    chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func: pipCloseMain }).catch(() => {});
+    void pipOutSet(tabId, false);
+  }
+  // Back to the tab whose lyrics float: they go, as the pop-out window does.
+  if (lyricsNow && lyricsNow.tabId === tabId) stopLyrics();
   if (!prev || prev === tabId || launchFreeze !== true || !chrome.debugger) return;
   const p = await chrome.tabs.get(prev).catch(() => null);
   if (!p || !p.audible || p.windowId !== windowId) return;
-  const target = { tabId: prev };
+  // Lyrics-only mode (chosen from the pop-out's Lyrics button, kept until Video is chosen).
+  const { popOutMode = "video" } = await chrome.storage.local.get({ popOutMode: "video" });
+  if (popOutMode === "lyrics") {
+    await startLyrics(prev);
+    return;
+  }
+  await popOutVideoOf(prev);
+});
+
+/** Gamblium's own pop-out window for this tab's playing video (pipwin.js). */
+async function popOutVideoOf(tabId) {
+  const target = { tabId };
+  let ok = false;
   try {
     await chrome.debugger.attach(target, "1.3");
-    await chrome.debugger.sendCommand(target, "Runtime.evaluate", {
+    const r = await chrome.debugger.sendCommand(target, "Runtime.evaluate", {
       userGesture: true,
       awaitPromise: true,
-      expression: `(() => { const v = [...document.querySelectorAll('video')].find((x) => !x.paused && !x.ended && x.videoWidth > 0 && !x.disablePictureInPicture); if (!v || document.pictureInPictureElement) return false; return v.requestPictureInPicture().then(() => true, () => false); })()`,
+      returnByValue: true,
+      // Gamblium's own pop-out window: background (sound only), captions and lyrics buttons (pipwin.js).
+      expression: `(${pipMain.toString()})()`,
     });
+    ok = !!(r && r.result && r.result.value === true);
+    if (ok) await pipOutSet(tabId, true);
   } catch { /* a tab we may not attach to (a browser page, another debugger) */ }
   finally {
     await chrome.debugger.detach(target).catch(() => {});
+  }
+  // The pop-out's Lyrics button tells us through a page event (heard only in this tab).
+  if (ok) {
+    chrome.scripting.executeScript({
+      target: { tabId }, world: "ISOLATED",
+      func: () => {
+        if (window.__gambliumLyricsButton) return;
+        window.__gambliumLyricsButton = true;
+        document.addEventListener("gamblium-lyrics", () => {
+          window.__gambliumLyricsButton = false;
+          chrome.runtime.sendMessage({ type: "lyrics-from-pip" }).catch(() => {});
+        }, { once: true });
+      },
+    }).catch(() => {});
+  }
+  return ok;
+}
+
+// ---- Floating lyrics (issue #242) --------------------------------------------------
+// One long-lived connection to the helper while the lyrics float: the helper starts
+// gamblium-lyrics.exe and passes our messages to it, and its buttons (Video, Tab, Close) back.
+// The connection ending closes the window. The playing tab reports its song and position
+// (lyrics.js, lyricsWatch); on YouTube the video's own timed captions are the lyrics when it has
+// any, else the lyrics window looks the song up on LRCLIB.
+let lyricsNow = null; // { tabId, port, title }
+
+async function startLyrics(tabId) {
+  if (lyricsNow && lyricsNow.tabId !== tabId) stopLyrics();
+  if (!lyricsNow) {
+    let port;
+    try { port = chrome.runtime.connectNative(NATIVE_HOST); } catch { return false; }
+    lyricsNow = { tabId, port, title: null };
+    port.onMessage.addListener((m) => void onLyricsMessage(m));
+    port.onDisconnect.addListener(() => {
+      if (lyricsNow && lyricsNow.port === port) {
+        unwatchLyrics(lyricsNow.tabId);
+        lyricsNow = null;
+      }
+    });
+    port.postMessage({ type: "lyrics-start" });
+  }
+  await chrome.scripting.executeScript({ target: { tabId }, world: "ISOLATED", func: lyricsWatch }).catch(() => {});
+  return true;
+}
+
+function lyricsSend(msg) {
+  if (!lyricsNow) return;
+  try { lyricsNow.port.postMessage({ type: "lyrics", msg }); } catch { /* gone */ }
+}
+
+function unwatchLyrics(tabId) {
+  chrome.tabs.sendMessage(tabId, { type: "lyrics-unwatch" }).catch(() => {});
+}
+
+function stopLyrics() {
+  if (!lyricsNow) return;
+  const l = lyricsNow;
+  lyricsNow = null;
+  try { l.port.postMessage({ type: "lyrics", msg: { type: "quit" } }); } catch { /* gone */ }
+  try { l.port.disconnect(); } catch { /* gone */ }
+  unwatchLyrics(l.tabId);
+}
+
+async function onLyricsMessage(m) {
+  if (!m || !lyricsNow) return;
+  if (m.type === "lyrics-started" && m.ok === false) {
+    console.warn("lyrics:", m.error);
+    stopLyrics();
+    return;
+  }
+  if (m.type !== "lyrics-event") return;
+  const tabId = lyricsNow.tabId;
+  if (m.what === "tab") {
+    stopLyrics();
+    const t = await chrome.tabs.update(tabId, { active: true }).catch(() => null);
+    if (t) chrome.windows.update(t.windowId, { focused: true }).catch(() => {});
+  } else if (m.what === "pip") {
+    stopLyrics();
+    await chrome.storage.local.set({ popOutMode: "video" });
+    await popOutVideoOf(tabId);
+  } else if (m.what === "close" || m.what === "closed") {
+    stopLyrics();
+  } else if (m.what === "settings") {
+    // The gear: Settings > Look > Floating lyrics, in the window the song plays in.
+    const t = await chrome.tabs.get(tabId).catch(() => null);
+    const opened = await chrome.tabs.create({ url: chrome.runtime.getURL("ui/settings.html#lyrics"), windowId: t ? t.windowId : undefined, active: true }).catch(() => null);
+    if (opened) chrome.windows.update(opened.windowId, { focused: true }).catch(() => {});
+  } else if (m.what === "seek" && Number.isFinite(m.to)) {
+    // A click on the lyrics' seek bar: the song jumps there.
+    chrome.scripting.executeScript({ target: { tabId }, world: "ISOLATED", func: lyricsControl, args: ["seek", m.to] }).catch(() => {});
+  } else if (m.what === "prev" || m.what === "toggle" || m.what === "next") {
+    // The card's player buttons, done in the playing tab.
+    chrome.scripting.executeScript({ target: { tabId }, world: "ISOLATED", func: lyricsControl, args: [m.what] }).catch(() => {});
+  }
+}
+
+async function captionsFor(tabId) {
+  const [r] = await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func: ytCaptionLines }).catch(() => [null]);
+  const v = r && r.result;
+  if (v && v.lines && v.lines.length) lyricsSend({ type: "lines", lines: v.lines, source: v.source, kind: v.kind || "captions" });
+  else if (v && v.why) console.info("lyrics: no captions used:", v.why);
+  // A compilation: its songs, each looked up in turn (people's captions, when there are any, win).
+  const [c] = await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func: ytChapters }).catch(() => [null]);
+  if (c && Array.isArray(c.result) && c.result.length) lyricsSend({ type: "chapters", chapters: c.result });
+}
+
+chrome.runtime.onMessage.addListener((msg, sender) => {
+  if (!msg || typeof msg.type !== "string" || !msg.type.startsWith("lyrics-")) return;
+  const tabId = sender && sender.tab && sender.tab.id;
+  if (msg.type === "lyrics-from-pip" && tabId) {
+    void pipOutSet(tabId, false);
+    void chrome.storage.local.set({ popOutMode: "lyrics" });
+    void startLyrics(tabId);
+    return;
+  }
+  if (!lyricsNow || tabId !== lyricsNow.tabId) return;
+  if (msg.type === "lyrics-track") {
+    lyricsSend({ type: "track", title: msg.title, artist: msg.artist, album: msg.album, duration: msg.duration, art: msg.art || "" });
+    if (msg.title !== lyricsNow.title) {
+      lyricsNow.title = msg.title;
+      void captionsFor(tabId);
+    }
+  } else if (msg.type === "lyrics-clock") {
+    lyricsSend({ type: "clock", position: msg.position, paused: msg.paused, rate: msg.rate });
   }
 });
 
@@ -1124,6 +1405,7 @@ async function takeOver(item, routed) {
     }).catch(() => {});
   } else {
     privateJobs.add(started.download);
+    chrome.storage.session.set({ privateJobs: [...privateJobs] }).catch(() => {});
   }
   downloadCard(started.download, name, item.incognito).catch(() => {});
   setTimeout(async () => {
@@ -1132,7 +1414,9 @@ async function takeOver(item, routed) {
     if (row && row.state === "error" && !(row.done > 0)) {
       await native({ type: "dl-forget", id: started.download });
       // Started by this extension, so stayReason leaves it with Brave.
-      chrome.downloads.download({ url: item.finalUrl || item.url }).catch(() => {});
+      // Not from a private window: the browser would download it in the normal profile, with its
+      // cookies and into its history (review 2, 3.5).
+      if (!item.incognito) chrome.downloads.download({ url: item.finalUrl || item.url }).catch(() => {});
     }
   }, GIVE_BACK_AFTER_MS);
   return true;
@@ -1140,14 +1424,17 @@ async function takeOver(item, routed) {
 
 // Downloads from private windows: taken off our list as soon as they are finished, so nothing
 // of them stays in the Downloads page.
+// Kept in session storage too: the worker sleeps, and a set only in memory was forgotten (review 2, 3.6).
 const privateJobs = new Set();
+chrome.storage.session.get({ privateJobs: [] }).then(({ privateJobs: kept }) => { for (const id of kept || []) privateJobs.add(id); }).catch(() => {});
 setInterval(async () => {
   if (!privateJobs.size) return;
   const list = await native({ type: "dl-list" }).catch(() => null);
   for (const d of (list && list.downloads) || []) {
-    if (privateJobs.has(d.id) && d.state === "done") {
+    if (privateJobs.has(d.id) && ["done", "error", "stopped", "cancelled", "failed"].includes(d.state)) {
       await native({ type: "dl-forget", id: d.id }).catch(() => {});
       privateJobs.delete(d.id);
+      chrome.storage.session.set({ privateJobs: [...privateJobs] }).catch(() => {});
     }
   }
 }, 5000);
@@ -1160,13 +1447,13 @@ async function downloadCard(id, name, incognito) {
   if (!win) return;
   const [tab] = await chrome.tabs.query({ active: true, windowId: win.id });
   if (tab && /^https?:/.test(tab.url || "")) {
-    const ok = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: showDownloadCard, args: [{ id, name }] }).then(() => true, () => false);
+    const ok = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: showDownloadCard, args: [{ id, name, incognito: !!incognito }] }).then(() => true, () => false);
     if (ok) return;
   }
   const W = 342, H = 112;
   const left = Math.max(0, (win.left || 0) + (win.width || 1200) - W - 16);
   const top = (win.top || 0) + 84;
-  await chrome.windows.create({ url: chrome.runtime.getURL(`ui/dl-card.html?id=${encodeURIComponent(id)}&name=${encodeURIComponent(name)}`), type: "popup", width: W, height: H, left, top, focused: false, incognito: !!incognito }).catch(() => {});
+  await chrome.windows.create({ url: chrome.runtime.getURL(`ui/dl-card.html?id=${encodeURIComponent(id)}&name=${encodeURIComponent(name)}${incognito ? "&incognito=1" : ""}`), type: "popup", width: W, height: H, left, top, focused: false, incognito: !!incognito }).catch(() => {});
 }
 
 async function downloadCardRow(id) {
@@ -1455,7 +1742,228 @@ async function saveSessions(store) {
   await chrome.storage.local.set({ sessionsPacked: packed });
   await chrome.storage.local.remove("sessions");
   sessionCache = store;
+  mirrorSoon();
 }
+
+// ---- What `gamblium-cli list` sees of this browser (owner, Nov 15 2026: "the list should show
+// everything, in detail, for the agent") ------------------------------------------------------
+// The owner's own browser hands the helper its open windows and tabs and its saved tab sets
+// (addresses, titles, groups; never the typed text or scroll a set keeps), a few seconds after
+// anything changes. The helper seals it for this Windows user (cli-view.sealed). Private windows
+// are left out. Agents' and named sessions' browsers do not send it: the CLI asks them directly.
+let mirrorTimer = null;
+let mirrorAt = 0;
+function mirrorSoon() {
+  if (IS_AGENT_BUILD || mirrorTimer) return;
+  // At most every 30 s: each send starts a helper process and writes a sealed file (review 9,
+  // G11: 10 s tripled that idle cost). The list can be up to 30 s old when a window closes.
+  const wait = Math.max(4000, mirrorAt + 30000 - Date.now());
+  chrome.storage.session.set({ mirrorPending: true }).catch(() => {});
+  mirrorTimer = setTimeout(() => { mirrorTimer = null; mirrorAt = Date.now(); chrome.storage.session.set({ mirrorPending: false }).catch(() => {}); void mirrorNow().catch(() => {}); }, wait);
+}
+// The worker can sleep before the timer fires: the minute alarm sends a view still waiting (review 2, 3.7).
+async function mirrorIfPending() {
+  const { mirrorPending } = await chrome.storage.session.get({ mirrorPending: false }).catch(() => ({}));
+  if (mirrorPending && !mirrorTimer) { await chrome.storage.session.set({ mirrorPending: false }).catch(() => {}); mirrorAt = Date.now(); await mirrorNow().catch(() => {}); }
+}
+const SET_ID_CHARS = "abcdefghijkmnpqrstuvwxyz23456789";
+function newSetId(taken) {
+  for (;;) {
+    const b = crypto.getRandomValues(new Uint8Array(6));
+    const id = [...b].map((x) => SET_ID_CHARS[x % SET_ID_CHARS.length]).join("");
+    if (!taken.includes(id)) return id;
+  }
+}
+// A saved tab set's id: made once per name, kept beside the sets (the sets themselves are untouched).
+async function tabSetIds(names) {
+  const { tabSetIds: ids = {} } = await chrome.storage.local.get({ tabSetIds: {} });
+  let changed = false;
+  for (const n of names) if (!ids[n]) { ids[n] = newSetId(Object.values(ids)); changed = true; }
+  for (const n of Object.keys(ids)) if (!names.includes(n)) { delete ids[n]; changed = true; }
+  if (changed) await chrome.storage.local.set({ tabSetIds: ids });
+  return ids;
+}
+async function mirrorNow() {
+  const store = await sessionStore();
+  const ids = await tabSetIds(Object.keys(store));
+  const sets = Object.values(store).map((s) => ({
+    id: ids[s.name], name: s.name, savedAt: s.savedAt,
+    windows: s.windows.map((w) => ({
+      tabs: w.tabs.map((t) => ({ url: t.url, title: t.title || "", pinned: !!t.pinned, active: !!t.active, group: t.group != null && w.groups && w.groups[t.group] ? w.groups[t.group].title || w.groups[t.group].color : null })),
+    })),
+  })).sort((a, b) => b.savedAt - a.savedAt);
+  const [tabs, wins, groups] = await Promise.all([chrome.tabs.query({}), chrome.windows.getAll(), chrome.tabGroups ? chrome.tabGroups.query({}) : []]);
+  const gname = new Map(groups.map((g) => [g.id, g.title || g.color]));
+  const open = wins.filter((w) => !w.incognito).map((w) => ({
+    id: w.id, focused: !!w.focused, state: w.state,
+    tabs: tabs.filter((t) => t.windowId === w.id).sort((a, b) => a.index - b.index).map((t) => ({
+      id: t.id, url: t.url || t.pendingUrl || "", title: t.title || "", icon: /^https:/.test(t.favIconUrl || "") ? t.favIconUrl : "", active: !!t.active, pinned: !!t.pinned,
+      playing: !!t.audible, asleep: !!t.discarded, group: t.groupId > -1 ? gname.get(t.groupId) || null : null,
+    })),
+  }));
+  await native({ type: "cli-view", view: { at: Date.now(), open, sets } });
+}
+
+// ---- A pinned site's own icon (New Tab page) -------------------------------------------------
+// An open tab of the site first, else the site's page (no cookies): its icon links, then
+// /favicon.ico. At most 64 KB, as a data address. No DOM in a worker: the links are read as text.
+// At most `max` bytes of a response, read as it arrives: a huge or endless body is cut off, not
+// read whole into the worker (review 3, A22). null when over the limit and `strict`.
+async function readUpTo(r, max, strict) {
+  const reader = r.body && r.body.getReader();
+  if (!reader) return null;
+  const parts = []; let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) { try { await reader.cancel(); } catch {} if (strict) return null; parts.push(value.slice(0, value.byteLength - (size - max))); size = max; break; }
+    parts.push(value);
+  }
+  return { parts, size };
+}
+const asDataUrl = (blob) => new Promise((r) => { const f = new FileReader(); f.onload = () => r(f.result); f.onerror = () => r(null); f.readAsDataURL(blob); });
+async function iconAt(src) {
+  try {
+    const r = await fetch(src, { credentials: "omit" });
+    if (!r.ok) return null;
+    const got = await readUpTo(r, 64000, true);
+    if (!got) return null;
+    const b = new Blob(got.parts, { type: (r.headers.get("content-type") || "").split(";")[0].trim() });
+    const image = /^image\//.test(b.type) || /\.ico(\?|$)/i.test(src);
+    if (!image || b.size < 60 || b.size > 64000) return null;
+    return asDataUrl(/^image\//.test(b.type) ? b : new Blob([b], { type: "image/x-icon" }));
+  } catch { return null; }
+}
+async function learnIcon(url) {
+  let host = "";
+  try { host = new URL(url).host; } catch { return null; }
+  if (!/^https?:/.test(url)) return null;
+  try {
+    const t = (await chrome.tabs.query({})).find((x) => { try { return new URL(x.url || "").host === host && /^https:/.test(x.favIconUrl || ""); } catch { return false; } });
+    const got = t ? await iconAt(t.favIconUrl) : null;
+    if (got) return got;
+  } catch {}
+  try {
+    const r = await fetch(url, { credentials: "omit" });
+    if (r.ok && /html/i.test(r.headers.get("content-type") || "")) {
+      const got = await readUpTo(r, 300000, false);
+      const html = got ? new TextDecoder().decode(await new Blob(got.parts).arrayBuffer()) : "";
+      const links = [...html.matchAll(/<link\b[^>]*>/gi)].map((m) => m[0])
+        .filter((tag) => /\brel\s*=\s*["']?[^"'>]*\b(icon|apple-touch-icon)\b/i.test(tag))
+        .map((tag) => ({ href: (tag.match(/\bhref\s*=\s*["']([^"']+)["']/i) || [])[1], touch: /apple-touch/i.test(tag), size: Math.max(0, ...((tag.match(/\bsizes\s*=\s*["']([^"']+)["']/i) || [, ""])[1].split(/\s+/).map((x) => parseInt(x, 10) || 0))) }))
+        .filter((l) => l.href)
+        .sort((a, b) => (b.touch - a.touch) || (b.size - a.size));
+      for (const l of links.slice(0, 4)) {
+        const got = await iconAt(new URL(l.href.replace(/&amp;/g, "&"), r.url).href);
+        if (got) return got;
+      }
+    }
+  } catch {}
+  return iconAt(new URL("/favicon.ico", url).href);
+}
+
+// ---- Global memory and session memory (owner, Nov 16 2026) --------------------------------------
+// Onboarding's choices are the browser's (helper: Gamblium\global.sealed, encrypted for this Windows user), read by every session's
+// browser, the owner's own Gamblium included. A browser follows them until a person changes its New
+// Tab settings in it: each key a person changed in a session (lookOwnKeys, set by the New Tab
+// page) is that session's own; every other key follows global memory.
+// Notes and to-dos are always a session's own; pinned sites come from global memory only while the
+// session has none of its own.
+const SESSION_OWN = ["notes", "todos"];
+async function followGlobal() {
+  if (IS_AGENT_BUILD) return;
+  const g = await native({ type: "global-get" }).catch(() => null);
+  if (!g || g.ok === false) return;
+  const cur = await chrome.storage.local.get({ newtab: null, colours: null, onboarded: false, lookFrom: 0, lookOwnKeys: [], lookOwn: false, pinsSeen: [] });
+  // Set before per-key memory (lookOwn): every key is that session's own (review 3, A13).
+  if (cur.lookOwn === true && cur.newtab && !(cur.lookOwnKeys || []).length) {
+    cur.lookOwnKeys = Object.keys(cur.newtab);
+    await chrome.storage.local.set({ lookOwnKeys: cur.lookOwnKeys, lookOwn: false }).catch(() => {});
+  }
+  if (!g.global || !g.global.look) {
+    // No global memory yet (set up before it existed): the browser where onboarding ran (the
+    // owner's own profile, not a session's) gives its choices once.
+    const inSession = await inSessionFolder();
+    if (cur.onboarded && cur.newtab && !inSession) {
+      const newtab = { ...cur.newtab };
+      for (const k of SESSION_OWN) delete newtab[k];
+      await native({ type: "global-set", look: { newtab, colours: cur.colours }, ifEmpty: true }).catch(() => null);
+    }
+    return;
+  }
+  // A merge not made yet is made even when this version was already followed: a session running
+  // older code followed it without the merge (owner, Nov 16 2026: Work kept an empty name and the
+  // automatic clock).
+  const { mergedFrom = 0 } = await chrome.storage.local.get({ mergedFrom: 0 });
+  // One merge per onboarding run (look.mergeRun), not per write (review 10, H5); older global
+  // memory has no run id and its version stands for it.
+  const runOf = (look, version) => look.mergeRun || version;
+  const mergeDue = g.global.look.merge === 2 && mergedFrom !== runOf(g.global.look, g.global.version);
+  const { mergeFix1: fixed } = await chrome.storage.local.get({ mergeFix1: false });
+  if (cur.lookFrom >= g.global.version && !mergeDue && (fixed || !mergedFrom)) return;
+  cur.mergedFrom = mergedFrom;
+  const mine = cur.newtab || {};
+  const theirs = g.global.look.newtab || {};
+  let own = new Set(Array.isArray(cur.lookOwnKeys) ? cur.lookOwnKeys : []);
+  // Global memory written by the onboarding of this update (look.merge 2; owner, Nov 16 2026):
+  // every session follows it once again, its own keys set aside. What it had before is kept in
+  // `newtabBefore` so nothing is lost.
+  const merge = g.global.look.merge === 2 && cur.mergedFrom !== runOf(g.global.look, g.global.version);
+  // What a session chose for itself wins over global memory: its pins, its look and the place of
+  // its cards (owner, Nov 16 2026). What it never chose (name, time, search) follows global.
+  const KEEP_OWN = ["layout", "widgets", "backdrop", "clockSize", "zones", "pins"];
+  const { newtabBefore, mergeFix1 } = await chrome.storage.local.get({ newtabBefore: null, mergeFix1: false });
+  if (merge) {
+    // The first backup stays: a later merge never writes over what the session had before them all.
+    if (!newtabBefore) await chrome.storage.local.set({ newtabBefore: { at: Date.now(), newtab: mine, lookOwnKeys: [...own] } }).catch(() => {});
+    own = new Set([...own].filter((k) => KEEP_OWN.includes(k)));
+  }
+  // Once, for sessions merged by the first rule (which set every key aside): their own placement,
+  // cards and look come back from the backup (owner, Nov 16 2026: Work lost its own layout).
+  let repaired = false;
+  if (!mergeFix1 && newtabBefore && newtabBefore.newtab && cur.mergedFrom && !merge) {
+    const before = newtabBefore.newtab;
+    const wasOwn = new Set(Array.isArray(newtabBefore.lookOwnKeys) ? newtabBefore.lookOwnKeys : []);
+    for (const k of ["layout", "widgets", "backdrop", "clockSize", "zones"]) {
+      if (wasOwn.has(k) && k in before) { mine[k] = before[k]; own.add(k); repaired = true; }
+    }
+  }
+  // Global memory, then this session's own keys over it.
+  const newtab = { ...mine, ...theirs };
+  for (const k of own) if (k in mine) newtab[k] = mine[k];
+  for (const k of SESSION_OWN) newtab[k] = mine[k] ?? (k === "notes" ? "" : []);
+  // Name and clock: global's when it has one, the session's own when global leaves it empty.
+  for (const k of ["name", "clock"]) if (!own.has(k) && (theirs[k] === undefined || theirs[k] === "" || theirs[k] === "auto") && mine[k]) newtab[k] = mine[k];
+  // Pins are added, never replaced: global pins this session has not had yet join its own, in
+  // global's order after its own; one it removed is not brought back (pinsSeen).
+  const seen = new Set(Array.isArray(cur.pinsSeen) ? cur.pinsSeen : []);
+  const pinKey = (u) => String(u || "").replace(/#.*$/, "").replace(/\/$/, "").toLowerCase();
+  const pins = Array.isArray(mine.pins) ? [...mine.pins] : [];
+  for (const p of theirs.pins || []) {
+    const k = pinKey(p.url);
+    if (seen.has(k) || pins.some((q) => pinKey(q.url) === k)) { seen.add(k); continue; }
+    // Left out only for want of room: not marked seen, so it joins when a place is free (H19).
+    if (pins.length < 16) { pins.push(p); seen.add(k); }
+  }
+  for (const p of pins) seen.add(pinKey(p.url));
+  newtab.pins = pins;
+  await chrome.storage.local.set({ newtab, colours: g.global.look.colours ?? null, onboarded: true, lookFrom: g.global.version, pinsSeen: [...seen], lookOwnKeys: [...own], mergeFix1: true, ...(merge ? { mergedFrom: runOf(g.global.look, g.global.version) } : {}) });
+  if (repaired) console.log("global memory: this session's own layout, cards and look are back");
+}
+let followAt = 0;
+const followSoon = () => { if (Date.now() - followAt < 30000) return; followAt = Date.now(); void followGlobal().catch(() => {}); };
+setTimeout(followSoon, 0);
+chrome.tabs.onCreated.addListener(() => followSoon());
+for (const ev of ["onCreated", "onRemoved", "onMoved", "onAttached", "onDetached", "onActivated"]) chrome.tabs[ev].addListener(() => mirrorSoon());
+chrome.tabs.onUpdated.addListener((_id, c, tab) => {
+  if (c.url || c.pinned !== undefined || c.groupId !== undefined) return mirrorSoon();
+  // A hidden tab's title or icon (an unread counter, a timer) does not change what is listed.
+  if ((c.title || c.favIconUrl) && tab && tab.active) mirrorSoon();
+});
+chrome.windows.onRemoved.addListener(() => mirrorSoon());
+
+setTimeout(() => mirrorSoon(), 0); // after the whole script has run: IS_AGENT_BUILD is defined further down
 
 // Who is saving: a stable id for this profile, its label, and its folder.
 async function profileInfo() {
@@ -1497,7 +2005,8 @@ async function capturePages(tabs) {
 async function sessionSave({ name, scope, windowId, closeAfter, withPages }) {
   const clean = cleanName(name);
   if (!clean) return { ok: false, error: "Give the session a name." };
-  let tabs = await allTabs();
+  // Never a private window's tabs: each is an anonymous session with nothing kept.
+  let tabs = (await allTabs()).filter((t) => !t.incognito);
   if (scope === "window") tabs = tabs.filter((t) => t.windowId === windowId);
   const groups = chrome.tabGroups ? await chrome.tabGroups.query({}) : [];
   const { pages, zooms } = withPages === false ? { pages: {}, zooms: {} } : await capturePages(tabs);
@@ -1521,6 +2030,30 @@ async function sessionSave({ name, scope, windowId, closeAfter, withPages }) {
     for (const id of ids) await chrome.windows.remove(id).catch(() => {});
   }
   return { ok: true, name: clean, windows: session.windows.length, ...session.notes };
+}
+
+// "Sleep" in Tabs and memory: the list on screen can be seconds old, and the extension may have
+// put the tab to sleep meanwhile (it does so within seconds when memory is short). Asking the
+// browser again then failed with "Cannot discard tab with id: N" (owner, Nov 23 2026: Gmail).
+// So each tab is looked at first, and a tab that is asleep by the end counts as done.
+async function sleepTabs(tabIds) {
+  const out = { ok: true, slept: 0, already: 0, showing: 0, gone: 0, failed: 0 };
+  for (const id of (Array.isArray(tabIds) ? tabIds : []).filter((x) => Number.isInteger(x))) {
+    const t = await chrome.tabs.get(id).catch(() => null);
+    if (!t) { out.gone++; continue; }
+    if (t.discarded) { out.already++; continue; }
+    if (t.active) { out.showing++; continue; }
+    try {
+      await chrome.tabs.discard(id);
+      out.slept++;
+    } catch {
+      const now = await chrome.tabs.get(id).catch(() => null);
+      if (!now) out.gone++;
+      else if (now.discarded) out.already++;
+      else out.failed++;
+    }
+  }
+  return out;
 }
 
 // Put a freshly created background tab to sleep before it loads.
@@ -1635,7 +2168,9 @@ async function sessionImport({ session }) {
 
 const NATIVE_HOST = "com.gamblium.host";
 const NATIVE_TYPES = new Set([
-  "ping", "stats", "freeze", "thaw", "trim", "lift-extension", "brand-get", "brand-set", "restart", "dl-start", "dl-list", "dl-cancel", "dl-resume", "dl-forget", "dl-action", "open-folder", "open-tor", "welcome-done", "bring-scan", "login-list", "login-save", "login-remove", "login-fill", "update-check", "update-status", "update-restart", "capture-window", "capture-piece", "seal", "open", "named-sessions", "permit-check", "permit-get", "permit-set", "scope-list", "scope-add", "scope-check", "audit", "scan", "cve",
+  "closed-all", "open-in-main", "lyrics-style-get", "lyrics-style-set", "lyrics-knob-upload",
+  "session-fork", "fork-cookies", "fork-done", "fork-ask", "fork-ask-done", "cli-view",
+  "ping", "code-stamp", "stats", "freeze", "thaw", "trim", "lift-extension", "brand-get", "brand-set", "restart", "dl-start", "dl-list", "dl-cancel", "dl-resume", "dl-forget", "dl-action", "open-folder", "open-tor", "welcome-done", "bring-scan", "login-list", "login-save", "login-remove", "login-fill", "update-check", "update-status", "update-restart", "capture-window", "capture-piece", "seal", "open", "pdf-read", "start-main", "global-get", "global-set", "named-sessions", "permit-check", "permit-get", "permit-set", "scope-list", "scope-add", "scope-check", "audit", "scan", "cve",
 ]);
 
 async function native(request) {
@@ -1682,7 +2217,15 @@ async function syncLaunchScheme() {
   if (launchTheme !== ping.theme) await chrome.storage.local.set({ launchTheme: ping.theme, scheme });
 }
 syncLaunchScheme();
-native({ type: "lift-extension" });
+// The helper raises this extension's process from idle priority; the browser may reset it, so
+// again now and then, but not on every worker start and alarm (a helper process each minute).
+async function liftSoon() {
+  const { liftedAt = 0 } = await chrome.storage.session.get({ liftedAt: 0 }).catch(() => ({}));
+  if (Date.now() - liftedAt < 10 * 60000) return;
+  await chrome.storage.session.set({ liftedAt: Date.now() }).catch(() => {});
+  native({ type: "lift-extension" });
+}
+liftSoon();
 
 // ---- Links on darkened websites (darklinks.js, content/darklinks.js) -----------------
 // Only while the browser darkens light-only websites and a colour is chosen (Settings >
@@ -1725,6 +2268,32 @@ async function welcomeOnce() {
   // no welcome page in front. Nothing is marked, so a normal start later
   // still shows it.
   const ping = await native({ type: "ping" });
+  // Onboarding once more after this update (owner, Nov 16 2026), in the first window a person
+  // opens, whichever it is (the neutral window the icon opens, a session's, their own Gamblium):
+  // what is chosen there is global memory that every session follows. Once for all: when global
+  // memory is of this form (merge 2) no window asks again. Until then every start of a window a
+  // person looks at shows it (a PDF's window too), once per start (owner, Nov 16 2026: "a feature").
+  const g = await native({ type: "global-get" }).catch(() => null);
+  const { welcomeAsked } = await chrome.storage.session.get({ welcomeAsked: false }).catch(() => ({ welcomeAsked: false }));
+  const again = !!(ping && ping.seen) && !welcomeAsked && !(g && g.global && g.global.look && g.global.look.merge >= 2);
+  if (again) {
+    // Global memory applied here first, so the page opens on it, not on defaults that its first
+    // change would then write over every session (review 10, H17).
+    await followGlobal().catch(() => {});
+    const url = chrome.runtime.getURL("ui/welcome.html");
+    if (await fetch(url).then((r) => r.ok, () => false)) {
+      await chrome.storage.session.set({ welcomeAsked: true }).catch(() => {});
+      await chrome.storage.local.set({ welcomeSeen: true });
+      // A new install's mark is used up here too, or the next start shows it a second time
+      // (review 10, H4).
+      if (ping.newInstall) native({ type: "welcome-done" });
+      chrome.tabs.create({ url: "chrome://newtab/#/welcome" });
+    }
+    return;
+  }
+  // Global memory done (merge 2): the person went through it in some window; not again here.
+  // A new install still shows it once (owner, Nov 14 2026; `install --remove` keeps global memory).
+  if (g && g.global && g.global.look && g.global.look.merge >= 2 && !(ping && ping.newInstall)) return;
   if (ping && ping.welcome === false) return;
   // Gamblium installed anew (not updated): the welcome shows again, even in a profile that went
   // through it before (owner, Nov 14 2026).
@@ -1748,19 +2317,31 @@ chrome.runtime.onStartup.addListener(welcomeOnce);
 // that is not one of our pages is loaded again and becomes ours. A tab showing
 // our page is one of this extension's contexts; private windows keep Brave's
 // page (an extension cannot replace it there).
+// The same for every tab of ours the browser brought back before this extension was ready: a New
+// Tab drawn by Brave's own page, or one of our pages (Sessions, Tabs and memory) that did not
+// load. After an unpack the browser starts later and its tabs came back after the 3 s this
+// looked (owner, Nov 16 2026: restored tabs looked like plain Brave until reloaded). Looked at
+// over the first 30 s of a browser run, and whenever such a tab is opened.
+const OUR_PAGE = new RegExp("^" + chrome.runtime.getURL("").replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+const isNewTab = (u) => /^chrome:\/\/newtab\/?(#.*)?$/.test(u || "");
+async function notOurs(tabs) {
+  const ours = new Set((await chrome.runtime.getContexts({ contextTypes: ["TAB"] }).catch(() => [])).map((c) => c.tabId));
+  return tabs.filter((t) => !t.incognito && !t.discarded && t.status === "complete" && !ours.has(t.id) && (isNewTab(t.pendingUrl || t.url) || OUR_PAGE.test(t.url || "")));
+}
 async function ownTheFirstNewTab() {
-  for (let round = 0; round < 3; round++) {
-    const tabs = (await allTabs()).filter((t) => !t.incognito && !t.discarded && /^chrome:\/\/newtab\/?(#.*)?$/.test(t.pendingUrl || t.url || ""));
-    if (!tabs.length) return;
-    const ours = new Set((await chrome.runtime.getContexts({ contextTypes: ["TAB"] })).map((c) => c.tabId));
-    const theirs = tabs.filter((t) => !ours.has(t.id) && t.status === "complete");
-    for (const t of theirs) await chrome.tabs.reload(t.id).catch(() => {});
-    if (tabs.every((t) => ours.has(t.id))) return;
-    await new Promise((r) => setTimeout(r, 1000));
-  }
+  for (const t of await notOurs(await allTabs())) await chrome.tabs.reload(t.id).catch(() => {});
 }
 chrome.runtime.onInstalled.addListener(ownTheFirstNewTab);
 chrome.runtime.onStartup.addListener(ownTheFirstNewTab);
+browserStart.then(() => {
+  if (Date.now() - browserStartAt > 30000) return;
+  for (const ms of [0, 1000, 2500, 5000, 9000, 15000, 30000]) setTimeout(() => void ownTheFirstNewTab().catch(() => {}), ms);
+});
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+  const t = await chrome.tabs.get(tabId).catch(() => null);
+  if (!t) return;
+  for (const bad of await notOurs([t])) await chrome.tabs.reload(bad.id).catch(() => {});
+});
 
 // The user's own colours (Settings > Appearance) are told to the helper, so
 // the launcher can dress the browser's frame in them at the next start and
@@ -1790,7 +2371,17 @@ async function tabStats() {
       }
     }),
   );
-  const result = attribute(tabs, framesByTab, reading, previousReading);
+  // Our pop-out window is a tab of its own (about:blank) drawn by the video tab's process: it was
+  // listed as "about:blank" with that tab's memory again (owner, Nov 20 2026). It is left out, and
+  // the tab it came from says "popped out".
+  const popped = new Set(await pipTabs(tabs));
+  const poppedPids = new Set([...popped].flatMap((id) => framesByTab[id] || []));
+  const perWindow = {};
+  for (const t of tabs) perWindow[t.windowId] = (perWindow[t.windowId] || 0) + 1;
+  const isPopout = (t) => popped.size && perWindow[t.windowId] === 1 && /^about:blank/.test(t.url || t.pendingUrl || "") && (framesByTab[t.id] || []).some((p) => poppedPids.has(p));
+  const shownTabs = tabs.filter((t) => !isPopout(t));
+  const result = attribute(shownTabs, framesByTab, reading, previousReading);
+  for (const r of result.tabs) if (popped.has(r.tabId)) r.poppedOut = true;
   previousReading = { at_ms: reading.at_ms, processes: reading.processes.map((p) => ({ pid: p.pid, cpu_ms: p.cpu_ms })) };
   const tabGroups = chrome.tabGroups ? await chrome.tabGroups.query({}).catch(() => []) : [];
   const { groupLimits = {} } = await chrome.storage.local.get({ groupLimits: {} });
@@ -1891,13 +2482,75 @@ const ctl = makeCtl({
   sessionDelete: (m) => sessionDelete(m),
   sessionExport: (name) => sessionStore().then((st) => st[name] || null),
   sessionImport: (m) => sessionImport(m),
+  fork: (name, hidden) => sessionFork(name, hidden),
 });
 let bridgePort = null;
 let bridgeInfo = { connected: false, port: null, error: null };
 
 async function bridgeWanted() {
   const { agentBridge } = await chrome.storage.local.get({ agentBridge: null });
-  return agentBridge === null ? IS_AGENT_BUILD : agentBridge === true;
+  if (agentBridge !== null) return agentBridge === true;
+  if (IS_AGENT_BUILD) return true;
+  // A named session's own browser (Gamblium/sessions/<id>), a person's full window included:
+  // the CLI and the Session manager reach it (tabs, Go to session). The owner's own Gamblium: no.
+  return inSessionFolder();
+}
+// This browser's profile folder, asked of the helper once per browser run (storage.session ends
+// with the browser): every minute's ping cost a helper process.
+async function myUserDataDir() {
+  const { myDir } = await chrome.storage.session.get({ myDir: null }).catch(() => ({ myDir: null }));
+  if (typeof myDir === "string") return myDir;
+  const ping = await native({ type: "ping" }).catch(() => null);
+  const dir = String((ping && ping.userDataDir) || "");
+  if (dir) await chrome.storage.session.set({ myDir: dir }).catch(() => {});
+  return dir;
+}
+// Once, in the owner's own Gamblium: windows lost at today's restarts come back (owner, Nov 16
+// 2026: Personal's 17-tab window went to Recently closed when a restart closed its windows one by
+// one). Only windows of 5+ web pages closed between 15:00 and 19:30 that day, and only if their
+// pages are not open already.
+async function bringBackLostWindows() {
+  const { lostWindowsBack1 } = await chrome.storage.local.get({ lostWindowsBack1: false });
+  if (lostWindowsBack1 || !chrome.sessions) return;
+  const dir = (await myUserDataDir()).replace(/[\\/]+$/, "");
+  if (!/[\\/]Gamblium[\\/]User Data$/i.test(dir)) return;
+  await chrome.storage.local.set({ lostWindowsBack1: true });
+  const from = new Date(2026, 10, 16, 15, 0).getTime() / 1000;
+  const to = new Date(2026, 10, 16, 19, 30).getTime() / 1000;
+  const open = new Set((await chrome.tabs.query({})).map((t) => t.url));
+  const closed = await chrome.sessions.getRecentlyClosed({ maxResults: 25 }).catch(() => []);
+  for (const c of closed) {
+    const urls = (c.window?.tabs ?? []).map((t) => t.url).filter((u) => /^https?:/i.test(u || ""));
+    if (!c.window || urls.length < 5 || c.lastModified < from || c.lastModified > to) continue;
+    if (urls.every((u) => open.has(u))) continue;
+    await chrome.sessions.restore(c.window.sessionId).catch(() => {});
+    console.log(`Gamblium: brought back a window of ${urls.length} pages lost at a restart`);
+  }
+}
+setTimeout(() => void bringBackLostWindows().catch(() => {}), 8000);
+
+// This browser's Recently closed, kept by the helper (sealed, in this profile's folder), so the
+// default No session window can list what every session closed (owner, Nov 20 2026).
+let closedMirrorTimer = null;
+function mirrorClosedSoon() {
+  if (IS_AGENT_BUILD || NO_WINDOW || !chrome.sessions) return;
+  clearTimeout(closedMirrorTimer);
+  closedMirrorTimer = setTimeout(async () => {
+    const web = (u) => /^https?:/i.test(u || "");
+    const closed = await chrome.sessions.getRecentlyClosed({ maxResults: 15 }).catch(() => []);
+    const items = closed
+      .map((c) => c.tab
+        ? (web(c.tab.url) ? { kind: "tab", at: (c.lastModified ?? 0) * 1000, title: c.tab.title || "", url: c.tab.url } : null)
+        : c.window ? { kind: "window", at: (c.lastModified ?? 0) * 1000, tabs: (c.window.tabs ?? []).filter((t) => web(t.url)).slice(0, 40).map((t) => ({ title: t.title || "", url: t.url })) } : null)
+      .filter((x) => x && (x.kind === "tab" || x.tabs.length));
+    native({ type: "closed-mirror", items }).catch(() => {});
+  }, 3000);
+}
+if (chrome.sessions && chrome.sessions.onChanged) chrome.sessions.onChanged.addListener(mirrorClosedSoon);
+setTimeout(mirrorClosedSoon, 5000);
+
+async function inSessionFolder() {
+  return /[\\/]Gamblium[\\/]sessions[\\/]/i.test(await myUserDataDir());
 }
 
 async function bridgeEnsure() {
@@ -2050,7 +2703,7 @@ async function quietWindow(windowId) {
   const s = await settings();
   const tabs = await allTabs();
   for (const t of tabs) if (t.windowId === windowId) t.lastAccessed = 0; // as if hidden long ago
-  const ctx = { awakeTabs: await awakeTabs(), busyTabs: [...new Set([...busyTabs(), ...(await pageDownloadTabs(tabs))])], domReady: Object.fromEntries(domReady) };
+  const ctx = { pipTabs: await videoOutTabs(tabs), awakeTabs: await awakeTabs(), busyTabs: [...new Set([...busyTabs(), ...(await pageDownloadTabs(tabs))])], domReady: Object.fromEntries(domReady) };
   return freezeCheck(tabs, s, Date.now(), ctx);
 }
 
@@ -2430,6 +3083,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     : msg.type === "group-reopen" ? reopenGroup(String(msg.id || ""), _sender.tab?.windowId)
     : msg.type === "group-icon-set" ? groupIconSet(Number(msg.groupId), String(msg.icon || "").slice(0, 16))
     : msg.type === "sleep-now" ? sleepNow(msg.scope, msg.windowId).then((slept) => ({ slept }))
+    : msg.type === "sleep-tabs" ? sleepTabs(msg.tabIds)
     : msg.type === "peek-frame" ? peekFrame(_sender)
     : msg.type === "peek-done" ? peekDone(_sender)
     : msg.type === "peek-esc" ? (_sender?.tab ? chrome.tabs.sendMessage(_sender.tab.id, { type: "peek-close" }, { frameId: 0 }).then(() => ({ ok: true }), () => ({ ok: false })) : Promise.resolve({ ok: false }))
@@ -2446,6 +3100,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     : msg.type === "capture-get" ? captureGet(msg.id)
     : msg.type === "capture-clear" ? captureClear()
     : msg.type === "native" ? native(msg.request)
+    : msg.type === "learn-icon" ? learnIcon(msg.url).then((icon) => ({ icon }))
     : msg.type === "tab-stats" ? tabStats()
     : msg.type === "awake-get" ? awakeGet(msg.tabId)
     : msg.type === "awake-set" ? awakeSet(msg)
@@ -2455,7 +3110,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     : msg.type === "proxy-set" ? proxySet(msg.proxy)
     : msg.type === "light-sites-sync" ? syncLightSites()
     : msg.type === "session-list" ? sessionStore().then(summaries)
+    : msg.type === "bang-literal" ? bangLiteral(msg.tabId)
+    : msg.type === "session-new" ? sessionNew(msg)
+    : msg.type === "session-fork" ? sessionFork(String(msg.name || ""), msg.hidden === true, msg.kind === "main" ? "main" : "child")
     : msg.type === "session-save" ? sessionSave(msg)
+    : msg.type === "session-match" ? sessionStore().then((store) => ({ ok: true, match: matchSession(store, Array.isArray(msg.urls) ? msg.urls.map(String) : []) }))
     : msg.type === "session-restore" ? sessionRestore(msg)
     : msg.type === "session-delete" ? sessionDelete(msg)
     : msg.type === "session-export" ? sessionStore().then((st) => st[msg.name] || null)
@@ -2510,8 +3169,126 @@ chrome.storage.onChanged.addListener((c, area) => {
   if (area === "local" && (c.ownBangs || c.bangsOn)) bangRulesApply();
 });
 
+// ---- Fork (owner, Nov 15 2026) --------------------------------------------------------
+// A child session with this browser's sign-ins and none of its tabs: the cookies go to the
+// helper, which seals them into the new session's folder and starts it in a window; the child's
+// extension takes them in at its first start (forkImport) and the sealed file goes.
+async function sessionFork(name, hidden = false, kind = "child") {
+  if (!chrome.cookies) return { ok: false, error: "this copy of the extension cannot read sign-ins" };
+  const clean = name.trim();
+  if (!clean) return { ok: false, error: "Give the new session a name." };
+  const all = await chrome.cookies.getAll({});
+  const cookies = all.map((c) => ({
+    name: c.name, value: c.value, domain: c.domain, hostOnly: c.hostOnly, path: c.path, secure: c.secure,
+    httpOnly: c.httpOnly, sameSite: c.sameSite, session: c.session, expirationDate: c.expirationDate,
+  }));
+  const ping = await native({ type: "ping" });
+  const dir = String(ping?.userDataDir || "");
+  const parent = !dir || /[\\/]Gamblium[\\/]User Data[\\/]?$/i.test(dir) ? "main" : dir.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+  const r = await native({ type: "session-fork", name: clean, parent, cookies, hidden, kind });
+  return r && r.ok !== false ? { ok: true, name: clean, parent, cookies: cookies.length } : { ok: false, error: r?.error || "the session could not be made" };
+}
+
+// A new isolated or forked window from the menu, made here so that it finishes after the menu
+// closes; one at a time (a second click within 10 s is the same request).
+let sessionNewAt = 0;
+async function sessionNew({ kind, name }) {
+  if (Date.now() - sessionNewAt < 10000) return { ok: false, error: "already making one" };
+  sessionNewAt = Date.now();
+  const r = kind === "forked"
+    ? await sessionFork(String(name), false)
+    : await native({ type: "named-sessions", args: ["create", String(name), "--window", "--auto"] });
+  if (r && r.ok !== false && kind === "forked") await native({ type: "named-sessions", args: ["set", String(name), "auto=on"] });
+  return r;
+}
+
+async function forkImport() {
+  if (!chrome.cookies) return;
+  let first = await native({ type: "fork-cookies", from: 0 });
+  if (!first || first.ok === false || first.none) return;
+  let set = 0, failed = 0;
+  for (let r = first; r && r.cookies; ) {
+    for (const c of r.cookies) {
+      const host = String(c.domain || "").replace(/^\./, "");
+      const d = { url: `${c.secure ? "https" : "http"}://${host}${c.path || "/"}`, name: c.name, value: c.value, path: c.path, secure: c.secure, httpOnly: c.httpOnly, sameSite: c.sameSite };
+      if (!c.hostOnly && !c.name.startsWith("__Host-")) d.domain = c.domain;
+      if (!c.session && c.expirationDate) d.expirationDate = c.expirationDate;
+      if (await chrome.cookies.set(d).catch(() => null)) set++; else failed++;
+    }
+    if (r.next >= r.total) break;
+    r = await native({ type: "fork-cookies", from: r.next });
+  }
+  await native({ type: "fork-done" });
+  await chrome.storage.local.set({ forkImported: { at: Date.now(), set, failed } });
+}
+forkImport().catch(() => {});
+
+// ---- PDFs open in Gamblium PDF (owner, Nov 15 2026) -----------------------------------------
+// A web page answered with a PDF for a whole tab: the tab goes to our viewer (pdf/viewer.html),
+// which fetches the same address and shows it with its tools (Rust engine, nothing uploaded).
+// Attachments (Content-Disposition: attachment) are downloads and are left alone; so is a tab
+// the person sent back to the browser's own viewer (pdfViewerOff in storage turns it all off).
+const PDF_VIEWER = chrome.runtime.getURL("pdf/viewer.html");
+// The rebranded copy's own PDF page already starts Gamblium PDF (the address bar keeps the PDF's
+// address): then nothing is sent here. The helper knows from the launcher (gamblium-launch.json).
+let builtinPdfAsked = null;
+const builtinPdf = () => (builtinPdfAsked ||= native({ type: "ping" }).then((r) => !!(r && r.ok && r.builtinPdf), () => false));
+builtinPdf();
+const pdfPassThrough = new Set(); // tab ids sent to the browser's own viewer on purpose
+chrome.webRequest.onHeadersReceived.addListener((d) => {
+  if (d.tabId < 0 || d.statusCode !== 200 || pdfPassThrough.has(d.tabId)) return;
+  const h = (name) => (d.responseHeaders || []).find((x) => x.name.toLowerCase() === name)?.value || "";
+  if (!/^application\/(x-)?pdf\b/i.test(h("content-type")) || /attachment/i.test(h("content-disposition"))) return;
+  Promise.all([chrome.storage.local.get({ pdfViewerOff: false }), builtinPdf()]).then(([{ pdfViewerOff }, builtin]) => {
+    if (pdfViewerOff || builtin) return;
+    chrome.tabs.update(d.tabId, { url: `${PDF_VIEWER}?src=${encodeURIComponent(d.url)}` }).catch(() => {});
+  });
+}, { urls: ["http://*/*", "https://*/*"], types: ["main_frame"] }, ["responseHeaders"]);
+chrome.tabs.onRemoved.addListener((id) => void pdfPassThrough.delete(id));
+// A PDF file on this computer (opened from Explorer with Gamblium, or dropped on a window) goes
+// to the viewer too; the viewer reads it through the helper. Tabs already showing one when the
+// browser started (the first window of "Open with Gamblium") are sent over once the worker runs.
+const isPdfFile = (url) => /^file:\/\/\/.*\.pdf$/i.test(String(url || "").split(/[?#]/)[0]);
+async function pdfFileToViewer(tabId, url) {
+  if (!isPdfFile(url) || pdfPassThrough.has(tabId)) return;
+  const { pdfViewerOff } = await chrome.storage.local.get({ pdfViewerOff: false });
+  if (!pdfViewerOff && !(await builtinPdf())) chrome.tabs.update(tabId, { url: `${PDF_VIEWER}?file=${encodeURIComponent(url)}` }).catch(() => {});
+}
+chrome.webNavigation.onBeforeNavigate.addListener((d) => { if (d.frameId === 0) pdfFileToViewer(d.tabId, d.url); });
+chrome.tabs.onUpdated.addListener((id, change) => { if (change.url) pdfFileToViewer(id, change.url); });
+chrome.tabs.query({}).then((tabs) => tabs.forEach((t) => pdfFileToViewer(t.id, t.pendingUrl || t.url))).catch(() => {});
+// "Open in the browser's viewer" from our viewer: that tab is left alone from now on.
+chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+  if (msg?.type !== "pdf-browser-viewer" || !sender.tab || !String(sender.url || "").startsWith(PDF_VIEWER)) return;
+  pdfPassThrough.add(sender.tab.id);
+  chrome.tabs.update(sender.tab.id, { url: String(msg.url) }).then(() => reply({ ok: true }), (e) => reply({ ok: false, error: String(e) }));
+  return true;
+});
+
+// "Search the web for '!gh rustc'" picked in a search box of ours: that tab's next search goes to
+// the engine as typed. One session rule (a number no tab id reaches; Peek's rules use tab ids)
+// lets the tabs listed pass the bang rules, each for 15 s.
+const BANG_LITERAL_RULE = 2147480000;
+const literalTabs = new Map(); // tabId -> until (ms)
+async function bangLiteral(tabId) {
+  if (typeof tabId !== "number") return { ok: false, error: "no tab" };
+  literalTabs.set(tabId, Date.now() + 15000);
+  await literalRule();
+  setTimeout(literalRule, 15500);
+  return { ok: true };
+}
+async function literalRule() {
+  for (const [t, until] of literalTabs) if (until < Date.now()) literalTabs.delete(t);
+  const tabIds = [...literalTabs.keys()];
+  await chrome.declarativeNetRequest.updateSessionRules({
+    removeRuleIds: [BANG_LITERAL_RULE],
+    addRules: tabIds.length ? [{ id: BANG_LITERAL_RULE, priority: 10, action: { type: "allow" }, condition: { tabIds, resourceTypes: ["main_frame"], regexFilter: "^https?://" } }] : [],
+  }).catch(() => {});
+}
+
 chrome.webNavigation.onBeforeNavigate.addListener(async (d) => {
   if (d.frameId !== 0 || !/[?&](q|p|query)=/.test(d.url) || !/(!|%21)/.test(d.url)) return;
+  if ((literalTabs.get(d.tabId) || 0) > Date.now()) return; // asked for as typed
   const { ownBangs = {}, bangsOn = true } = await chrome.storage.local.get({ ownBangs: {}, bangsOn: true });
   if (!bangsOn) return;
   // What the rules redirect is not touched here: both at once raced (seen: Google loaded first).
@@ -2547,7 +3324,7 @@ async function freezeTheseNow(tabIds) {
   const tabs = await allTabs();
   const now = new Set(tabIds);
   for (const t of tabs) if (now.has(t.id)) t.lastAccessed = 0; // as if hidden long ago
-  const ctx = { awakeTabs: await awakeTabs(), busyTabs: [...new Set([...busyTabs(), ...(await pageDownloadTabs(tabs))])], domReady: Object.fromEntries(domReady) };
+  const ctx = { pipTabs: await videoOutTabs(tabs), awakeTabs: await awakeTabs(), busyTabs: [...new Set([...busyTabs(), ...(await pageDownloadTabs(tabs))])], domReady: Object.fromEntries(domReady) };
   return freezeCheck(tabs, s, Date.now(), ctx);
 }
 
@@ -2615,6 +3392,21 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
 chrome.commands.onCommand.addListener(async (command) => {
   if (command !== "command-bar" || IS_AGENT_BUILD) return;
   const w = await chrome.windows.getLastFocused({ windowTypes: ["normal"] }).catch(() => null);
+  const [front] = w ? await chrome.tabs.query({ active: true, windowId: w.id }).catch(() => []) : [];
+  const url = front?.url || front?.pendingUrl || "";
+  // Over the page (owner, Nov 15 2026: like Zen's): a web page draws it through
+  // content/commandbar-host.js; our own pages (the new tab) draw it themselves.
+  if (front && /^(https?|file):/.test(url)) {
+    const shown = await chrome.scripting.executeScript({ target: { tabId: front.id }, files: ["content/commandbar-host.js"] })
+      .then(() => chrome.scripting.executeScript({ target: { tabId: front.id }, func: (id) => globalThis.__gambliumCommandBar(id), args: [w.id] }))
+      .then(() => true, () => false);
+    if (shown) return;
+  }
+  if (front && (url.startsWith(chrome.runtime.getURL("")) || /^chrome:\/\/newtab/.test(url))) {
+    const r = await chrome.runtime.sendMessage({ type: "commandbar-show", tabId: front.id, windowId: w.id }).catch(() => null);
+    if (r?.ok) return;
+  }
+  // The browser's own pages: no extension may draw there, so a small window of its own.
   const width = 640, height = 420;
   await chrome.windows.create({
     url: chrome.runtime.getURL(`ui/commandbar.html?w=${w?.id ?? ""}`), type: "popup", focused: true, width, height,

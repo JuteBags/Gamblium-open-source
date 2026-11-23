@@ -659,8 +659,11 @@ def patch_menu_button(data, blank=False):
 
 _THEME_HANDLER = re.compile(re.escape(bytes.fromhex("564883ec204889cee8130000004889f14883c4205ee9")) + b"(....)" + re.escape(bytes.fromhex("cc")), re.S)
 _FIELD_PAIR = re.compile(re.escape(bytes.fromhex("8b96")) + b"(....)" + re.escape(bytes.fromhex("448b86")) + b"(....)", re.S)
+# Chromium 158 (Brave 1.100.58) saves one register fewer (no `push r15`) and keeps a bigger frame
+# (sub rsp,0x48; the cookie at [rsp+0x40]); the pattern takes both.
 _SET_VISIBLE = re.compile(
-    re.escape(bytes.fromhex("415741565657534883ec4089d34889ce488b05")) + b"...." + re.escape(bytes.fromhex("4831e04889442438408ab9")) + b"...." + re.escape(bytes.fromhex("4038d775")),
+    b"(?:" + re.escape(bytes.fromhex("4157")) + b")?" + re.escape(bytes.fromhex("41565657534883ec")) + b"[@H]" + re.escape(bytes.fromhex("89d34889ce488b05")) + b"...."
+    + re.escape(bytes.fromhex("4831e048894424")) + b"[8@]" + re.escape(bytes.fromhex("408ab9")) + b"...." + re.escape(bytes.fromhex("4038d775")),
     re.S,
 )
 
@@ -1308,6 +1311,10 @@ def run(folder, branding, check=False, log=print, name="Gamblium", guard="Gambli
                 pk["res"][rid] = gzip.compress(new, mtime=0)
                 write_atomic(pack_path, P.to_bytes(pk))
             break
+    # 7. The browser's own PDF viewer page starts Gamblium PDF (pdf_loader.js); the address bar
+    #    keeps the PDF's address and the browser's viewer stays as the fallback.
+    report["pdf"] = builtin_pdf(ver, check, log)
+
     for what, said in report["settings"].items():
         log(f"settings, {what}: {said}")
     if not report["settings"]:
@@ -1317,6 +1324,56 @@ def run(folder, branding, check=False, log=print, name="Gamblium", guard="Gambli
     if not report["vector"]:
         log("vector lion: none found (already replaced, or Brave's drawing has changed)")
     return 0, report
+
+
+PDF_LOADER = Path(__file__).with_name("pdf_loader.js")
+PDF_MARK = b"Gamblium PDF loader"
+BUILTIN_PDF = "gamblium-pdf-builtin"
+
+
+def is_pdf_main(body):
+    """The PDF viewer page's start script (main.js), as Brave ships it or as we wrote it."""
+    return PDF_MARK in body or (b"import './pdf_viewer_wrapper.js';" in body and b"createBrowserApi" in body and b"function main()" in body and b"Print Preview" not in body)
+
+
+def pdf_index(body):
+    """The viewer page without its own start of the browser's viewer (the loader imports it
+    when it steps aside)."""
+    return body.replace(b'<script type="module" src="pdf_viewer_wrapper.js"></script>\n', b"").replace(b'<script type="module" src="pdf_viewer_wrapper.js"></script>', b"")
+
+
+def builtin_pdf(ver, check=False, log=print):
+    """Points the browser's PDF viewer page at Gamblium PDF. Found by content, not by number
+    (numbers change with every Brave version). Leaves BUILTIN_PDF in the version folder."""
+    pack_path = ver / "resources.pak"
+    if not pack_path.is_file():
+        log("PDF viewer: resources.pak not found")
+        return "no pack"
+    pk = P.read(pack_path)
+    main_id = index_id = None
+    for rid, raw in pk["res"].items():
+        if P.kind(raw) != "gzip" or len(raw) > 20_000:
+            continue
+        body = P.inflate(raw)
+        if is_pdf_main(body):
+            main_id = rid
+        elif b'<pdf-viewer id="viewer"></pdf-viewer>' in body:
+            index_id = rid
+    if main_id is None or index_id is None:
+        log("PDF viewer: its page was not found (Brave changed it?); PDFs go through the extension")
+        (ver / BUILTIN_PDF).unlink(missing_ok=True) if not check else None
+        return "not found"
+    loader = PDF_LOADER.read_bytes().replace(b"\r\n", b"\n")
+    index = pdf_index(P.inflate(pk["res"][index_id]))
+    changed = P.inflate(pk["res"][main_id]) != loader or P.inflate(pk["res"][index_id]) != index
+    if not check:
+        if changed:
+            pk["res"][main_id] = gzip.compress(loader, mtime=0)
+            pk["res"][index_id] = gzip.compress(index, mtime=0)
+            write_atomic(pack_path, P.to_bytes(pk))
+        (ver / BUILTIN_PDF).write_text("the PDF viewer page starts Gamblium PDF (tools/rebrand/pdf_loader.js)\n", encoding="utf-8")
+    log(f"PDF viewer: {'Gamblium PDF built in' if changed else 'already Gamblium PDF'} (resources {main_id}, {index_id})")
+    return "built in" if changed else "already"
 
 
 def main(argv=None):

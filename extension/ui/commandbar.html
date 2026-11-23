@@ -6,23 +6,53 @@
 <link rel="stylesheet" href="tokens.css">
 <script src="scheme.js"></script>
 <style>
-  html, body { margin: 0; height: 100%; background: var(--surface, #1c1f26); color: var(--text, #e8eaf0); font: 14px/1.4 var(--font-ui, "Segoe UI", system-ui, sans-serif); }
-  main { display: grid; grid-template-rows: auto 1fr; height: 100%; }
-  input { margin: 12px; padding: 12px 14px; font: inherit; font-size: 16px; border-radius: var(--radius-control, 8px); border: 1px solid var(--border, #3a3f4b); background: var(--bg, #14161b); color: inherit; outline: none; }
-  input:focus { border-color: var(--accent, #7aa2ff); }
-  ul { list-style: none; margin: 0; padding: 0 8px 8px; overflow: auto; }
-  li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-md, 8px); cursor: pointer; }
-  li[aria-selected="true"] { background: color-mix(in srgb, var(--accent, #7aa2ff) 22%, transparent); }
-  .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .n { color: var(--text-muted, #a3a9b7); font-size: 12px; white-space: nowrap; }
-  .k { color: var(--text-muted, #a3a9b7); font-size: 12px; width: 52px; }
+  /* Over a page (?overlay=1) the frame is see-through and the panel floats; in a window of its own
+     the panel fills it. One panel either way: big field, grouped results. */
+  html, body { margin: 0; height: 100%; color: var(--text, #e8eaf0); font: 14px/1.4 var(--font-ui, "Segoe UI", system-ui, sans-serif); }
+  html { background: var(--bg, #14161b); }
+  html.overlay, html.overlay body { background: transparent; height: auto; overflow: hidden; }
+  html.overlay .panel { max-height: 560px; }
+  .panel { display: flex; flex-direction: column; max-height: 100%; box-sizing: border-box; overflow: hidden;
+    background: color-mix(in srgb, var(--surface, #1c1f26) 96%, transparent); }
+  html.overlay .panel { border-radius: 16px; border: 1px solid color-mix(in srgb, var(--text, #e8eaf0) 10%, transparent);
+    box-shadow: 0 28px 80px rgba(0, 0, 0, .55), 0 2px 8px rgba(0, 0, 0, .3); }
+  html:not(.overlay) .panel { height: 100%; }
+
+  .field { display: flex; align-items: center; gap: 12px; padding: 0 18px; height: 60px; flex: none;
+    border-bottom: 1px solid color-mix(in srgb, var(--text, #e8eaf0) 8%, transparent); }
+  .field svg { flex: none; color: var(--text-muted, #a3a9b7); }
+  input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: inherit; font: inherit; font-size: 18px; }
+  input::placeholder { color: var(--text-muted, #a3a9b7); opacity: .8; }
+  .bangtag { flex: none; font-size: 12px; padding: 3px 8px; border-radius: 999px; color: var(--accent, #7aa2ff);
+    background: color-mix(in srgb, var(--accent, #7aa2ff) 16%, transparent); }
+
+  #list { list-style: none; margin: 0; padding: 6px 8px 8px; overflow: auto; flex: 1; min-height: 0; }
+  .group { padding: 10px 10px 4px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--text-muted, #a3a9b7); }
+  .row { display: flex; align-items: center; gap: 12px; height: 42px; padding: 0 10px; border-radius: 10px; cursor: pointer; }
+  .row[aria-selected="true"] { background: color-mix(in srgb, var(--accent, #7aa2ff) 18%, transparent); }
+  .ic { width: 20px; height: 20px; flex: none; display: grid; place-items: center; color: var(--text-muted, #a3a9b7); }
+  .ic img { width: 16px; height: 16px; border-radius: 3px; }
+  .row[aria-selected="true"] .ic { color: var(--accent, #7aa2ff); }
+  .t { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+  .t b { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .t small { color: var(--text-muted, #a3a9b7); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  kbd { flex: none; font: 11px/1 var(--font-ui, "Segoe UI", system-ui, sans-serif); color: var(--text-muted, #a3a9b7);
+    padding: 4px 6px; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--text, #e8eaf0) 14%, transparent); }
+  .row:not([aria-selected="true"]) .enter { display: none; }
+  .empty { padding: 18px 12px; color: var(--text-muted, #a3a9b7); }
+
 </style>
 </head>
 <body>
-<main>
-  <input id="q" type="text" autocomplete="off" spellcheck="false" placeholder="Type an action, a tab or an address…" aria-label="Command" aria-controls="list">
+<div class="panel" role="dialog" aria-label="Command bar">
+  <label class="field">
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>
+    <input id="q" type="text" autocomplete="off" spellcheck="false" placeholder="Search tabs, actions, the web… or !gh to search GitHub" aria-label="Command" aria-controls="list" aria-autocomplete="list">
+    <span id="bangtag" class="bangtag" hidden></span>
+  </label>
   <ul id="list" role="listbox" aria-label="Results"></ul>
-</main>
+</div>
 <script type="module" src="commandbar.js"></script>
 </body>
 </html>

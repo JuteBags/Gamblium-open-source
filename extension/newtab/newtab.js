@@ -11,6 +11,7 @@ import { $, el, send, openPage } from '../ui/page.js';
 import { showUpdateBanner } from '../ui/update-banner.js';
 import { GROUP_COLOURS } from '../ui/pages-logic.js';
 import { siteIcon, siteIconEl, monogram, guardIcon } from '../site-icons.js';
+import { bangOffer } from '../bangs.js';
 import { resolve, suggestRoutes } from '../routes.js'; // also brings the stored colour scheme up to date
 
 const KEY = 'gamblium.newtab';
@@ -44,6 +45,9 @@ const parse = (text) => {
 };
 
 let prefs = readPrefs(parse(local.get(KEY)));
+// What was stored last, key by key: a save marks as this session's own only the keys the person
+// changed here (global memory keeps the rest; background.js followGlobal).
+let storedKeys = Object.fromEntries(Object.entries(prefs).map(([k, v]) => [k, JSON.stringify(v)]));
 let topSites = pickSites(parse(local.get(TOP_CACHE)) ?? [], 8);
 let topKnown = false; // true once the browser has answered
 
@@ -52,15 +56,49 @@ const favicon = (url, size = 32) => guardIcon(el('img', { alt: '', src: `/_favic
 // the browser has none (it only has one for a site that was opened before).
 const iconBytes = (url) => fetch(`/_favicon/?pageUrl=${encodeURIComponent(url)}&size=32`).then((r) => r.arrayBuffer()).then((b) => new Uint8Array(b));
 let blankIcon; // what the browser gives when it has no icon; asked once
+// The site's own icon, fetched once and kept (owner, Nov 16 2026: pins showed a letter or our
+// own "G" for Calendar and Meet). Kept in this extension's storage by site, so every New Tab page
+// shows it at once, offline too. Order: kept icon, an open tab of that site, the site's own page
+// (fetched without cookies), the browser's icon, our mark, a letter.
+const PIN_ICONS = 'pinIcons';
+const hostKey = (u) => { try { return new URL(u).host; } catch { return ''; } };
+// Read once per page (it was once per pin); a site with no usable icon is remembered for a day, so
+// it is not fetched again on every New Tab page.
+let keptIconsP = null;
+const keptIcons = () => (keptIconsP ??= chrome.storage.local.get({ [PIN_ICONS]: {} }).then((r) => r[PIN_ICONS] || {}, () => ({})));
+const ICON_RETRY_MS = 86_400_000;
+// The site's own icon is fetched by the extension's worker (background.js learnIcon): a site
+// that refuses (401, sign-in pages) is not an error of this page.
+async function learnIcon(url) {
+  const host = hostKey(url);
+  if (!host) return null;
+  const got = await chrome.runtime.sendMessage({ type: 'learn-icon', url }).then((r) => (r && typeof r.icon === 'string' ? r.icon : null), () => null);
+  const all = await keptIcons();
+  all[host] = got || `none:${Date.now()}`;
+  const keys = Object.keys(all);
+  for (const k of keys.slice(0, Math.max(0, keys.length - 200))) delete all[k];
+  await chrome.storage.local.set({ [PIN_ICONS]: all }).catch(() => {});
+  return got || null;
+}
 function pinIcon(pin) {
-  const known = siteIcon(pin.url);
-  if (known) return siteIconEl(known, 24);
+  const host = hostKey(pin.url);
   const img = favicon(pin.url);
-  blankIcon ??= iconBytes('https://no-such-site.invalid/');
-  Promise.all([iconBytes(pin.url), blankIcon]).then(([mine, blank]) => {
-    if (mine.length !== blank.length || !mine.every((v, i) => v === blank[i])) return;
-    img.replaceWith(el('span', { className: 'letter', textContent: monogram(pin.title, pin.url), ariaHidden: 'true' }));
-  }).catch(() => {}); // the browser's picture stays
+  const last = () => {
+    const known = siteIcon(pin.url);
+    if (known) return img.replaceWith(siteIconEl(known, 24));
+    blankIcon ??= iconBytes('https://no-such-site.invalid/');
+    Promise.all([iconBytes(pin.url), blankIcon]).then(([mine, blank]) => {
+      if (mine.length !== blank.length || !mine.every((v, i) => v === blank[i])) return;
+      img.replaceWith(el('span', { className: 'letter', textContent: monogram(pin.title, pin.url), ariaHidden: 'true' }));
+    }).catch(() => {}); // the browser's picture stays
+  };
+  keptIcons().then((all) => {
+    const kept = all[host];
+    if (typeof kept === 'string' && kept.startsWith('data:')) { img.src = kept; return; }
+    const failed = typeof kept === 'string' && kept.startsWith('none:') ? Number(kept.slice(5)) : 0;
+    if (failed && Date.now() - failed < ICON_RETRY_MS) return last();
+    learnIcon(pin.url).then((got) => { if (got) img.src = got; else last(); });
+  });
   return img;
 }
 const NS = 'http://www.w3.org/2000/svg';
@@ -119,9 +157,39 @@ function applyPrefs() {
 }
 function save() {
   local.set(KEY, JSON.stringify(prefs));
-  chrome.storage.local.set({ newtab: prefs });
+  const changed = Object.keys(prefs).filter((k) => JSON.stringify(prefs[k]) !== storedKeys[k]);
+  storedKeys = Object.fromEntries(Object.entries(prefs).map(([k, v]) => [k, JSON.stringify(v)]));
+  chrome.storage.local.get({ lookOwnKeys: [] }).then(({ lookOwnKeys }) => {
+    const own = [...new Set([...(Array.isArray(lookOwnKeys) ? lookOwnKeys : []), ...changed])];
+    return chrome.storage.local.set({ newtab: prefs, lookOwnKeys: own });
+  }).catch(() => chrome.storage.local.set({ newtab: prefs }));
   applyPrefs();
 }
+// Global memory changed (or another page saved): this page shows it, and never writes its older
+// copy back over it.
+chrome.storage.onChanged.addListener((c, area) => {
+  if (area !== 'local' || !c.newtab || !c.newtab.newValue) return;
+  const next = readPrefs(c.newtab.newValue);
+  if (JSON.stringify(next) === JSON.stringify(prefs)) return;
+  // Notes being typed here stay as typed (review 3, A14).
+  // What is in the box now, not the last saved text (review 5, C3). It is put back in the box but
+  // not into prefs: prefs keeps the stored text, so clicking away still sees a change and saves
+  // the box (review 6, D3: the typed text was taken as already saved and never written).
+  // Only when something was typed here and not yet saved (review 7, E3: a box merely focused got its
+  // old text back and wrote it over newer notes on blur).
+  const box = notesDirty && document.activeElement && document.activeElement.id === 'notes' ? document.activeElement : null;
+  const typed = box ? box.value : null;
+  const caret = box ? [box.selectionStart, box.selectionEnd] : null;
+  prefs = next;
+  storedKeys = Object.fromEntries(Object.entries(prefs).map(([k, v]) => [k, JSON.stringify(v)]));
+  local.set(KEY, JSON.stringify(prefs));
+  paintAll();
+  // Only when it differs, with the caret where it was (review 7, E5: it jumped to the end).
+  if (box && typed !== null && box.value !== typed) {
+    box.value = typed;
+    box.setSelectionRange(caret[0], caret[1]);
+  }
+});
 
 // ---- hello and time
 
@@ -167,17 +235,13 @@ function pinTile(pin, i) {
   const edit = el('button', { type: 'button', className: 'edit', title: 'Edit', ariaLabel: `Edit ${pin.title}` }, glyph(GLYPH.dots, 14));
   edit.addEventListener('click', () => openPinForm(i));
   const li = el('li', { className: 'tile' }, [a, edit]);
-  // Already open somewhere: say so, and go there instead of opening it twice.
+  // Already open in another tab: the tile says so, and a click still opens the site HERE, in
+  // this tab (owner, Nov 15 2026: a pin jumped to the open tab and closed this one; never again).
   const open = openTabFor(pin, openTabs);
   if (open) {
     li.classList.add('open');
     if (open.discarded) li.classList.add('asleep');
-    a.title = `${pin.title}: already open${open.discarded ? ', asleep' : ''}. Click goes to that tab.`;
-    a.addEventListener('click', (e) => {
-      if (e.ctrlKey || e.metaKey || e.shiftKey) return; // asked for a new tab or window on purpose
-      e.preventDefault();
-      go({ kind: 'tab', tabId: open.id, windowId: open.windowId });
-    });
+    a.title = `${pin.title}: also open in another tab${open.discarded ? ' (asleep)' : ''}. Click opens it here.`;
   }
   a.dataset.pin = String(i); // the right-click menu offers Edit and Remove for it (pageMenu below)
   a.addEventListener('dragstart', (e) => {
@@ -366,15 +430,45 @@ async function loadTop() {
 async function loadClosed() {
   if (!chrome.sessions) return fill('closed', []);
   try {
-    const closed = await chrome.sessions.getRecentlyClosed({ maxResults: 11 });
+    // Windows that held only New Tab, Gamblium's own pages or a question page are left out: they
+    // are not anything to reopen (owner, Nov 16 2026: a list full of "Window with 1 tab").
+    const web = (t) => /^https?:/i.test(t?.url ?? '');
+    // Cleared with the card's Clear button (owner, Nov 16 2026): what was closed before then is
+    // not listed. The browser has no call to empty its own list, so its time is kept instead.
+    const { closedClearedAt = 0 } = await chrome.storage.local.get({ closedClearedAt: 0 });
+    const closed = (await chrome.sessions.getRecentlyClosed({ maxResults: 25 })).filter((c) => (c.lastModified ?? 0) * 1000 > closedClearedAt && (c.tab ? web(c.tab) : (c.window?.tabs ?? []).some(web)));
     const now = Date.now();
     const items = [];
     // Closed tab groups (kept by the extension; the browser's list has none), in time order with the rest.
-    const groups = (await send({ type: 'closed-groups' }))?.groups ?? [];
+    const groups = ((await send({ type: 'closed-groups' }))?.groups ?? []).filter((g) => g.at > closedClearedAt);
     // A closed group's own tabs are not listed again under it (closing the group closed them).
     const inGroup = (c) => c.tab && groups.some((g) => Math.abs(g.at - (c.lastModified ?? 0) * 1000) < 10_000 && g.tabs.some((t) => t.url === c.tab.url));
     const rows = [...closed.filter((c) => !inGroup(c)).map((c) => ({ at: (c.lastModified ?? 0) * 1000, c })), ...groups.map((g) => ({ at: g.at, g }))].sort((a, b) => b.at - a.at).slice(0, 11);
-    for (const { at, c, g } of rows) {
+    // The default No session window: everything, across sessions (owner, Nov 20 2026). A session
+    // closed whole is listed by its name; what other sessions closed, with their name.
+    const all = await send({ type: 'native', request: { type: 'closed-all' } }).catch(() => null);
+    if (all && all.neutral && Array.isArray(all.profiles)) {
+      const open = (p) => (p.id === 'default' ? send({ type: 'native', request: { type: 'start-main' } }) : send({ type: 'native', request: { type: 'named-sessions', args: [p.open ? 'focus' : 'open', `#${p.id}`] } }));
+      const openUrl = (p, url) => (p.id === 'default' ? send({ type: 'native', request: { type: 'open-in-main', url } }) : send({ type: 'native', request: { type: 'named-sessions', args: ['open-url', `#${p.id}`, url] } }));
+      for (const p of all.profiles) {
+        if (!p.open && p.closedAt && p.closedAt > closedClearedAt) rows.push({ at: p.closedAt, s: p });
+        for (const it of p.items || []) if (it.at > closedClearedAt) rows.push({ at: it.at, other: { p, it, open, openUrl } });
+      }
+      rows.sort((a, b) => b.at - a.at);
+      rows.splice(11);
+    }
+    for (const { at, c, g, s, other } of rows) {
+      if (s) {
+        items.push(row({ icon: glyph(GLYPH.window), text: s.name, note: `closed ${ago(at, now)}`, title: `Open ${s.name} again`, act: () => (s.id === 'default' ? send({ type: 'native', request: { type: 'start-main' } }) : send({ type: 'native', request: { type: 'named-sessions', args: ['open', `#${s.id}`] } })) }));
+        continue;
+      }
+      if (other) {
+        const { p, it, open, openUrl } = other;
+        const when = `${ago(at, now)} · ${p.name}`;
+        if (it.kind === 'tab') items.push(row({ icon: favicon(it.url), text: it.title || hostOf(it.url), note: when, title: `Reopen in ${p.name}: ${it.url}`, act: () => openUrl(p, it.url) }));
+        else items.push(row({ icon: glyph(GLYPH.window), text: `Window with ${it.tabs.length} tab${it.tabs.length === 1 ? '' : 's'}`, note: when, title: `Reopen in ${p.name}`, act: async () => { if (!p.open) await open(p); for (const t of it.tabs) await openUrl(p, t.url); } }));
+        continue;
+      }
       if (g) {
         const n = g.tabs.length;
         // The group's own colour, as its chip had in the tab strip.
@@ -387,11 +481,12 @@ async function loadClosed() {
       if (c.tab && /^https?:/i.test(c.tab.url ?? '')) {
         items.push(row({ icon: favicon(c.tab.url), text: c.tab.title || hostOf(c.tab.url), note: when, title: `Reopen ${c.tab.url}`, act: () => chrome.sessions.restore(c.tab.sessionId) }));
       } else if (c.window) {
-        const n = c.window.tabs?.length ?? 0;
+        const n = (c.window.tabs ?? []).filter(web).length;
         items.push(row({ icon: glyph(GLYPH.window), text: `Window with ${n} tab${n === 1 ? '' : 's'}`, note: when, title: 'Reopen this window', act: () => chrome.sessions.restore(c.window.sessionId) }));
       }
     }
     fill('closed', items);
+    $('closedClear').hidden = items.length === 0;
   } catch {
     fill('closed', []);
   }
@@ -425,6 +520,30 @@ $('sleepAll').addEventListener('click', async () => {
 });
 $('openDash').addEventListener('click', () => openPage('ui/dashboard.html'));
 
+// Recent sessions: the owner's own Gamblium (Personal) and every named session, open ones first,
+// then the one closed last. A click goes to an open one, or starts a closed one in its window.
+async function loadBrowsers() {
+  const r = await send({ type: 'native', request: { type: 'named-sessions', args: ['list'] } });
+  if (!r || r.ok === false || !Array.isArray(r.sessions)) return fill('browsers', []);
+  const me = (await send({ type: 'native', request: { type: 'ping' } }))?.browserPid ?? null;
+  const all = [];
+  const d = r.default;
+  if (d) all.push({ name: d.named ? d.name : 'Personal', id: 'default', open: d.state === 'running', closedAt: d.closedAt ?? 0, pid: d.pid });
+  for (const s of r.sessions) if (!s.test && !s.temp) all.push({ name: s.name, id: s.id, open: s.state !== 'stopped', closedAt: s.closedAt ?? 0, pid: s.pid });
+  all.sort((a, b) => (b.open - a.open) || (b.closedAt - a.closedAt));
+  const now = Date.now();
+  let lastShown = false;
+  fill('browsers', all.slice(0, 8).map((s) => {
+    const here = me && s.pid === me;
+    let note = here ? 'this window' : s.open ? 'open' : s.closedAt ? `closed ${ago(s.closedAt, now)}` : 'not started yet';
+    if (!s.open && !lastShown && s.closedAt) { note = `continue · ${note}`; lastShown = true; }
+    const act = here ? null
+      : s.id === 'default' ? () => send({ type: 'native', request: { type: 'start-main' } })
+      : () => send({ type: 'native', request: { type: 'named-sessions', args: [s.open ? 'focus' : 'open', `#${s.id}`] } }).then(() => setTimeout(loadBrowsers, 1500));
+    return row({ icon: glyph(GLYPH.window), text: s.name, note, title: here ? 'You are in this one' : s.open ? `Go to ${s.name}` : `Open ${s.name} with its tabs`, act });
+  }));
+}
+
 async function loadSessions() {
   const list = await send({ type: 'session-list' });
   const now = Date.now();
@@ -432,6 +551,11 @@ async function loadSessions() {
     row({ icon: glyph(GLYPH.stack), text: s.name, note: `${s.tabs} tab${s.tabs === 1 ? '' : 's'} · ${ago(s.savedAt, now)}`, title: `Open the session "${s.name}"`, act: () => send({ type: 'session-restore', name: s.name }) })));
 }
 $('openSessions').addEventListener('click', () => openPage('ui/sessions.html'));
+$('browsersManager').addEventListener('click', () => openPage('ui/sessions.html'));
+$('closedClear').addEventListener('click', async () => {
+  await chrome.storage.local.set({ closedClearedAt: Date.now() });
+  loadClosed();
+});
 
 async function loadDownloads() {
   const list = await send({ type: 'downloads-list', limit: rowsOf('downloads') });
@@ -443,13 +567,20 @@ async function loadDownloads() {
   }));
 }
 
+let notesDirty = false;
 function keepNotes() {
+  if (!notesDirty) return;
+  notesDirty = false;
   const text = $('notes').value;
   if (text === prefs.notes) return;
   prefs.notes = text;
   save();
 }
+$('notes').addEventListener('input', () => { notesDirty = true; });
 $('notes').addEventListener('change', keepNotes);
+// Also on leaving the box: a change event is not certain after the box was set by script while
+// focused (review 6, D3). keepNotes does nothing when the text is already saved.
+$('notes').addEventListener('blur', keepNotes);
 
 // ---- more panels
 
@@ -623,7 +754,7 @@ $('zoneForm').addEventListener('submit', (e) => {
   runClock();
 });
 
-const LOAD = { top: loadTop, closed: loadClosed, status: loadStatus, sessions: loadSessions, downloads: loadDownloads, playing: loadPlaying, heavy: loadHeavy, recent: loadRecent, marks: loadMarks, calendar: paintCalendar, zones: paintZones, todo: paintTodo };
+const LOAD = { browsers: loadBrowsers, top: loadTop, closed: loadClosed, status: loadStatus, sessions: loadSessions, downloads: loadDownloads, playing: loadPlaying, heavy: loadHeavy, recent: loadRecent, marks: loadMarks, calendar: paintCalendar, zones: paintZones, todo: paintTodo };
 const loaded = new Set();
 /** Asks for what the shown panels need. Each panel asks once per page. */
 function loadShown() {
@@ -642,17 +773,33 @@ function loadShown() {
 let offers = []; // [{kind, text|url, title, tabId, windowId}], the first is always what Enter does with the text
 let picked = 0;
 let asked = 0;
-const KIND = { route: 'Gamblium', tab: 'Switch to tab', pin: 'Pinned', bookmark: 'Bookmark', history: 'History' };
+const KIND = { route: 'Gamblium', tab: 'Switch to tab', pin: 'Pinned', bookmark: 'Bookmark', history: 'History', bang: 'Bang' };
+// !bangs as they are typed (owner, Nov 15 2026): "!g" lists the bangs that start so; "!gh rustc"
+// offers GitHub first and the search engine with the text as typed second.
+let bangPrefs = { ownBangs: {}, bangsOn: true };
+chrome.storage.local.get(bangPrefs).then((p) => { bangPrefs = p; });
+chrome.storage.onChanged.addListener((c, area) => {
+  if (area === 'local' && (c.ownBangs || c.bangsOn)) chrome.storage.local.get({ ownBangs: {}, bangsOn: true }).then((p) => { bangPrefs = p; });
+});
 const me = chrome.tabs.getCurrent();
+// Alt+K on this page: the command bar over it (content/commandbar-host.js, loaded by index.html).
+let myTabId = null;
+me.then((t) => { myTabId = t?.id ?? null; });
+chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+  if (msg?.type !== 'commandbar-show' || msg.tabId !== myTabId || !globalThis.__gambliumCommandBar) return;
+  globalThis.__gambliumCommandBar(msg.windowId);
+  reply({ ok: true });
+});
 
 function paintOffers() {
   const list = $('suggest');
   list.replaceChildren(...offers.map((o, i) => {
-    const icon = o.kind === 'search' ? glyph(GLYPH.search) : o.kind === 'url' || o.kind === 'route' ? glyph(GLYPH.go) : favicon(o.url, 16);
+    const icon = o.kind === 'search' || o.kind === 'bangHint' ? glyph(GLYPH.search) : o.kind === 'url' || o.kind === 'route' ? glyph(GLYPH.go) : favicon(o.url, 16);
     const what = el('span', { className: 'what', textContent: o.title });
     if (o.url && o.kind !== 'url') what.append(el('small', { textContent: hostOf(o.url) }));
     if (o.kind === 'route' && o.address !== o.title) what.append(el('small', { textContent: o.address }));
-    const li = el('li', { id: `offer-${i}`, role: 'option', ariaSelected: String(i === picked) }, [icon, what, el('span', { className: 'kind', textContent: KIND[o.kind] ?? (o.kind === 'url' ? 'Go to address' : 'Search the web') })]);
+    const kind = o.kind === 'bangHint' ? o.name : KIND[o.kind] ?? (o.kind === 'url' ? 'Go to address' : 'Search the web');
+    const li = el('li', { id: `offer-${i}`, role: 'option', ariaSelected: String(i === picked) }, [icon, what, el('span', { className: 'kind', textContent: kind })]);
     li.addEventListener('mousedown', (e) => e.preventDefault()); // keep the caret in the box
     li.addEventListener('click', () => go(o));
     // The mouse only lights a row; what Enter opens stays the keyboard's row, so the two never look alike.
@@ -689,6 +836,22 @@ async function ask() {
     picked = 0;
     return paintOffers();
   }
+  const bang = bangPrefs.bangsOn ? bangOffer(text, bangPrefs.ownBangs) : null;
+  if (bang?.kind === 'bangs') {
+    ++asked;
+    offers = bang.list.map((b) => ({ kind: 'bangHint', bang: b.bang, name: b.name, title: `!${b.bang}` }));
+    picked = 0;
+    return paintOffers();
+  }
+  if (bang?.kind === 'bang') {
+    ++asked;
+    offers = [
+      { kind: 'bang', url: bang.url, title: bang.query ? `Search ${bang.name} for “${bang.query}”` : `Open ${bang.name}` },
+      { kind: 'search', text: text.trim(), title: `Search the web for “${text.trim()}”`, literal: true },
+    ];
+    picked = 0;
+    return paintOffers();
+  }
   const first = typed.kind === 'url' ? { kind: 'url', url: typed.url, title: text.trim() } : { kind: 'search', text: typed.text, title: typed.text };
   const turn = ++asked;
   const quiet = (p) => Promise.resolve(p).catch(() => []);
@@ -712,7 +875,16 @@ async function go(o) {
     location.hash = '#/' + o.to.route; // this document becomes the frame around that page
     return location.reload();
   }
+  if (o.kind === 'bangHint') {
+    // The bang goes into the box; the words come next.
+    $('q').value = `!${o.bang} `;
+    $('q').focus();
+    return ask();
+  }
+  if (o.kind === 'bang') return chrome.tabs.update({ url: o.url });
   if (o.kind === 'search') {
+    // The text as typed, bang and all: the bang rules let this tab pass for a moment.
+    if (o.literal) await send({ type: 'bang-literal', tabId: (await me)?.id });
     // The engine picked on first run, or the browser's own default when none was.
     const url = searchUrl(prefs.search, o.text);
     return url ? chrome.tabs.update({ url }) : chrome.search.query({ text: o.text, disposition: 'CURRENT_TAB' });
@@ -721,7 +893,8 @@ async function go(o) {
     const self = await me;
     await chrome.tabs.update(o.tabId, { active: true });
     await chrome.windows.update(o.windowId, { focused: true });
-    if (self) chrome.tabs.remove(self.id); // this empty tab has done its job
+    // This empty tab has done its job, unless it is all its window has: a window is never closed.
+    if (self && self.windowId === o.windowId) chrome.tabs.remove(self.id);
     return;
   }
   chrome.tabs.update({ url: o.url });
@@ -991,12 +1164,15 @@ function paintAll() {
 }
 paintAll();
 Promise.all([chrome.tabs.query({}), me]).then(([tabs, self]) => {
-  openTabs = tabs.filter((t) => t.id !== self?.id && /^https?:/i.test(t.url ?? ''));
+  // Only this window's tabs: a pin open in ANOTHER window opens here (owner, Nov 15 2026: a new
+  // window's YouTube pin jumped to the old window and the new window closed).
+  openTabs = tabs.filter((t) => t.id !== self?.id && t.windowId === self?.windowId && /^https?:/i.test(t.url ?? ''));
   if (openTabs.length && prefs.pins.length) paintPins();
 }, () => {});
 chrome.storage.local.get({ newtab: null }).then(({ newtab }) => {
   if (!newtab) return void chrome.storage.local.set({ newtab: prefs });
   const stored = readPrefs(newtab);
+  storedKeys = Object.fromEntries(Object.entries(stored).map(([k, v]) => [k, JSON.stringify(v)]));
   if (JSON.stringify(stored) === JSON.stringify(prefs)) return;
   prefs = stored;
   local.set(KEY, JSON.stringify(prefs));

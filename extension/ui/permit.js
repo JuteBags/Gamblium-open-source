@@ -6,8 +6,18 @@ import { permitStatus, permitShort, permitParts } from "./pages-logic.js";
 
 const demo = new URLSearchParams(location.search).has("demo");
 // settings: agents changing settings; logins: agents using the owner's saved logins.
-const what = new URLSearchParams(location.search).get("what") === "logins" ? "logins" : "settings";
-const WORDS = what === "logins"
+// person: agents working in a person's own session window (Work) (review 6, D2).
+const asked = new URLSearchParams(location.search).get("what");
+// logins:<site>|<profile>: one site's saved logins for one browser (review 2, 1.6).
+const what = asked === "logins" || asked === "person" || /^logins:.{1,300}$/.test(asked || "") ? asked : "settings";
+const [loginSite, loginWho] = what.startsWith("logins:") ? what.slice(7).split("|") : ["", ""];
+const WORDS = what === "person"
+  ? { ask: "Allow agents to work in your own session windows?", always: "Agents work in your session windows without asking", allowed: "Agents may work in your session windows for now", rule: "Agents ask before working in your session windows",
+      why: "A program working through Gamblium's command line wants to read or act on the pages of one of your own session windows (such as Work), where you are signed in." }
+  : loginSite
+  ? { ask: `Allow agents to log in to ${loginSite} with your saved login?`, always: `Agents use your ${loginSite} login without asking`, allowed: `Agents may use your ${loginSite} login for now`, rule: `Agents ask before using your ${loginSite} login`,
+      why: `An agent in ${loginWho || "a browser"} wants Gamblium to type your saved login for ${loginSite} into its sign-in page. The agent never sees the password. Other sites and other browsers still ask.` }
+  : what === "logins"
   ? { ask: "Allow agents to log in with your saved logins?", always: "Agents use your saved logins without asking", allowed: "Agents may use your saved logins for now", rule: "Agents ask before using your saved logins",
       why: "An agent wants Gamblium to type one of your saved logins into a sign-in page. The agent never sees the password." }
   : { ask: "Allow agents to change settings?", always: "Agents change settings without asking", allowed: "Agents may change settings for now", rule: "Agents ask before changing settings",
@@ -53,7 +63,8 @@ function draw(view) {
   $("foot").hidden = !asking;
   // With nothing asked and no permission running, the title already says it all.
   $("now").hidden = !asking && p.state !== "allowed" && p.state !== "always";
-  $("now").textContent = p.state === "allowed" ? `${permitStatus(view, now)} Until ${p.until}.` : permitStatus(view, now);
+  const thing = what === "person" ? "work in your own session windows" : what.startsWith("logins") ? (loginSite ? `use your ${loginSite} login` : "use your saved logins") : "change settings";
+  $("now").textContent = p.state === "allowed" ? `${permitStatus(view, now, thing)} Until ${p.until}.` : permitStatus(view, now, thing);
   $("times").replaceChildren(...p.times.map((minutes) => {
     const b = el("button", { type: "button", textContent: permitShort(minutes) });
     b.addEventListener("click", () => choose(minutes));

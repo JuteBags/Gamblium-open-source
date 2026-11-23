@@ -70,7 +70,7 @@ export function suggest(query, tabs = [], max = 9) {
   if (q) {
     for (const t of tabs) {
       const s = fit(q, (t.title || '') + ' ' + (t.url || ''));
-      if (s) lines.push({ kind: 'tab', tabId: t.id, windowId: t.windowId, title: t.title || t.url, note: hostOf(t.url), score: s + 1 });
+      if (s) lines.push({ kind: 'tab', tabId: t.id, windowId: t.windowId, title: t.title || t.url, note: hostOf(t.url), url: t.url, score: s + 1 });
     }
   }
   lines.sort((a, b) => b.score - a.score);

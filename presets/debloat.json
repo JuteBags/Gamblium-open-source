@@ -8,7 +8,6 @@
   "preferences": {
     "brave.has_seen_brave_welcome_page": true,
     "auto_pin_new_tab_groups": false,
-
     "brave.ai_chat.show_toolbar_button": false,
     "brave.ai_chat.context_menu_enabled": false,
     "brave.ai_chat.autocomplete_provider_enabled": false,
@@ -20,8 +19,9 @@
     "brave.today.should_show_toolbar_button": false,
     "brave.show_side_panel_button": false,
     "brave.sidebar.sidebar_show_option": 3,
-    "brave.sidebar.hidden_built_in_items": [1],
-
+    "brave.sidebar.hidden_built_in_items": [
+      1
+    ],
     "brave.new_tab_page.show_stats": false,
     "brave.new_tab_page.show_clock": false,
     "brave.new_tab_page.show_rewards": false,
@@ -36,7 +36,6 @@
     "NewTabPage.FooterVisible": false,
     "ntp_footer.settings.extension_attribution": false,
     "ntp_footer.settings.management_notice": false,
-
     "brave.speedreader.feature_enabled": false,
     "brave.wayback_machine_enabled": false,
     "brave.ask_widevine_install": false,
@@ -48,7 +47,10 @@
     "brave.brave_search_conversion.dismissed": true,
     "brave.brave_ads.sponsored.enabled": false,
     "brave.search.search_result_ad.should_show_clicked_infobar": false,
-    "brave.shields.adblock_only_mode_prompt_dismissed": true
+    "brave.shields.adblock_only_mode_prompt_dismissed": true,
+    "profile.content_settings.exceptions.local_fonts.chrome-extension://pbgbdlkcienglhbfadbjolphinilbpia,*": {
+      "setting": 1
+    }
   },
   "policies": {
     "BraveRewardsDisabled": 1,
@@ -68,5 +70,8 @@
     "PromotionalTabsEnabled": 0,
     "FeedbackSurveysEnabled": 0
   },
-  "args": ["--no-default-browser-check", "--disable-features=BraveOrigin,BraveAccount,NtpFooter"]
+  "args": [
+    "--no-default-browser-check",
+    "--disable-features=BraveOrigin,BraveAccount,NtpFooter"
+  ]
 }

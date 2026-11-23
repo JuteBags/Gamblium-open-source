@@ -11,6 +11,7 @@
 <script src="../ui/scheme.js"></script>
 <script src="first.js"></script>
 <script src="../content/menu.js" defer></script>
+<script src="../content/commandbar-host.js" defer></script>
 </head>
 <body>
 <header class="top">
@@ -61,6 +62,13 @@
   </section>
 
   <div class="deck">
+    <section class="card" data-widget="browsers" aria-labelledby="browsers-title">
+      <h2 id="browsers-title">Recent sessions</h2>
+      <button type="button" id="browsersManager" class="headbtn" title="Open the Session manager">Session manager</button>
+      <ul id="browsers" class="rows"></ul>
+      <p id="browsers-empty" class="empty" hidden>No sessions yet: make one in the Session manager.</p>
+    </section>
+
     <section class="card" data-widget="top" aria-labelledby="top-title">
       <h2 id="top-title">Most visited</h2>
       <ul id="top" class="rows"></ul>
@@ -69,6 +77,7 @@
 
     <section class="card" data-widget="closed" aria-labelledby="closed-title">
       <h2 id="closed-title">Recently closed</h2>
+      <button type="button" id="closedClear" class="headbtn" title="Clear this list (the pages stay in History)">Clear</button>
       <ul id="closed" class="rows"></ul>
       <p id="closed-empty" class="empty" hidden>Nothing closed yet in this session.</p>
     </section>

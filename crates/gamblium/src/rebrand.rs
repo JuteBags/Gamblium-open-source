@@ -16,6 +16,14 @@ const REPORT: &str = "gamblium-rebrand.json";
 /// In a browser folder that came inside the Gamblium package: it is ours
 /// whatever Brave is or is not installed on the machine.
 pub const SHIPPED: &str = "gamblium-shipped";
+/// Left in the version folder by tools/rebrand/extra.py once the browser's own PDF viewer page
+/// starts Gamblium PDF (the address bar keeps the PDF's own address).
+pub const BUILTIN_PDF: &str = "gamblium-pdf-builtin";
+
+/// Whether the browser `exe` shows PDFs in Gamblium PDF by itself.
+pub fn has_builtin_pdf(exe: &Path) -> bool {
+    exe.parent().and_then(version_folder).is_some_and(|v| v.join(BUILTIN_PDF).is_file())
+}
 
 /// The browser inside the package this program was started from
 /// (`browser\Application` beside the programs), if it is there and patched.
@@ -45,6 +53,43 @@ fn leftovers_away(dest: &Path) {
             }
         }
     }
+}
+
+/// `Gamblium\rebrand-incomplete.txt`: the changes the last rebrand could not make, one a line.
+pub fn incomplete_note() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("Gamblium").join("rebrand-incomplete.txt"))
+}
+
+/// The same list as `strict_misses` in tools/rebrand/extra.py: the chrome.dll changes not made.
+pub fn misses(report: &serde_json::Value) -> Vec<String> {
+    let strs = |k: &str| report[k].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_owned)).collect::<Vec<_>>();
+    let mut missed: Vec<String> = strs("menu button").into_iter().filter(|n| n.contains("left alone") || n.contains("not hidden")).collect();
+    if let Some(q) = report["question"].as_str().filter(|q| !q.is_empty() && !q.contains("silenced at")) {
+        missed.push(q.to_owned());
+    }
+    if !strs("vector").iter().any(|n| n.contains(": our mark")) {
+        missed.push("toolbar lion drawings: none replaced".into());
+    }
+    missed
+}
+
+/// A patcher's note in the owner's words.
+fn plain_miss(m: &str) -> String {
+    let l = m.to_ascii_lowercase();
+    if l.contains("toolbar lion") {
+        "Brave's lion still shows on the toolbar".into()
+    } else if l.contains("question") || l.contains("ack_ntp") || l.contains("bubble") {
+        "Brave may ask once whether to keep Gamblium's New Tab page".into()
+    } else if l.contains("menu") {
+        "Brave's own menu button is still there".into()
+    } else {
+        m.to_owned()
+    }
+}
+
+/// What the last rebrand left out (empty when it made every change).
+pub fn incomplete() -> Vec<String> {
+    incomplete_note().and_then(|f| fs::read_to_string(f).ok()).map(|t| t.lines().filter(|l| !l.trim().is_empty()).map(str::to_owned).collect()).unwrap_or_default()
 }
 
 pub fn copy_dir() -> Option<PathBuf> {
@@ -277,7 +322,10 @@ pub fn state(official_exe: &Path, copy: &Path) -> Copy {
     }
     let installed = official_exe.parent().and_then(version_folder).and_then(|f| version_name(&f)).unwrap_or_default();
     let name = version_name(&copy_version).unwrap_or_default();
-    if name == installed && copy_version.join(REPORT).is_file() {
+    // A patched copy stays in use when Brave updates itself: Gamblium is pinned to the Brave it
+    // was made from, and moves on only with `gamblium rebrand` (owner, Nov 20 2026: Brave
+    // 1.100's Chromium 158 switched the extension off overnight).
+    if copy_version.join(REPORT).is_file() {
         Copy::Fresh(exe)
     } else {
         Copy::Stale { copy: if copy_version.join(REPORT).is_file() { name } else { format!("{name}, not patched") }, installed }
@@ -352,7 +400,12 @@ pub fn needs_refresh(official_exe: &Path, home: &Path) -> bool {
         return false;
     }
     match state(official_exe, &copy) {
-        Copy::Fresh(_) => fs::read_to_string(copy.join(STAMP)).map(|s| s.trim() != inputs_stamp(home)).unwrap_or(true),
+        Copy::Fresh(_) => {
+            // Pinned: a copy of an older Brave is not remade from the newer installed one.
+            let installed = official_exe.parent().and_then(version_folder).and_then(|f| version_name(&f)).unwrap_or_default();
+            let ours = version_folder(&copy).and_then(|f| version_name(&f)).unwrap_or_default();
+            ours == installed && fs::read_to_string(copy.join(STAMP)).map(|s| s.trim() != inputs_stamp(home)).unwrap_or(true)
+        }
         _ => true,
     }
 }
@@ -363,10 +416,35 @@ pub fn refresh_if_needed(official_exe: &Path, home: &Path) -> Option<String> {
     if !needs_refresh(official_exe, home) {
         return None;
     }
+    // A Brave the patcher could not handle is not tried again at every start (it copied 537 MB and
+    // ran the patcher each time; review 2, 5.1): the failure is noted for that Brave version, and
+    // `gamblium rebrand` by hand tries again.
+    let version = official_exe.parent().and_then(version_folder).and_then(|f| version_name(&f)).unwrap_or_default();
+    let failed_note = copy_dir().and_then(|d| d.parent().map(|p| p.join("rebrand-failed.txt")));
+    if let Some(f) = &failed_note {
+        // Version and the patcher's own stamp: a changed patcher tries again (review 4, B11).
+        let stamp = inputs_stamp(home);
+        if !version.is_empty() && fs::read_to_string(f).is_ok_and(|t| {
+            let mut l = t.lines();
+            l.next() == Some(version.as_str()) && l.next() == Some(stamp.as_str())
+        }) {
+            return Some(format!("rebrand: Brave {version} could not be patched before; the official Brave starts (run `gamblium rebrand` to try again)"));
+        }
+    }
     Some(match make(official_exe, home, false) {
-        Ok(_) => "rebrand: the copy was made again (its inputs changed)".to_owned(),
+        Ok(_) => {
+            if let Some(f) = &failed_note {
+                let _ = fs::remove_file(f);
+            }
+            "rebrand: the copy was made again (its inputs changed)".to_owned()
+        }
         Err(e) if e.contains("in use") => "rebrand: the copy is in use; it is refreshed at the next start".to_owned(),
-        Err(e) => format!("rebrand: could not refresh the copy ({e})"),
+        Err(e) => {
+            if let Some(f) = &failed_note {
+                let _ = fs::write(f, format!("{version}\n{}\n{e}\n", inputs_stamp(home)));
+            }
+            format!("rebrand: could not refresh the copy ({e}); not tried again for Brave {version}")
+        }
     })
 }
 
@@ -435,6 +513,8 @@ pub fn make(official_exe: &Path, home: &Path, dry_run: bool) -> Result<Vec<Strin
     }
     // The lions the pack patcher cannot reach: the welcome page's picture and
     // the small drawing compiled into chrome.dll (address-bar chip).
+    // What the patcher could not change on this build; noted once the copy is in place (G28).
+    let mut missed_now: Option<Vec<String>> = None;
     let extra = home.join("tools").join("rebrand").join("extra.py");
     if extra.is_file() {
         // chrome.dll and brave.exe are patched in a temporary file, then swapped
@@ -459,6 +539,9 @@ pub fn make(official_exe: &Path, home: &Path, dry_run: bool) -> Result<Vec<Strin
                     let report: serde_json::Value = serde_json::from_slice(&run.stdout).unwrap_or_default();
                     let count = |k: &str| report[k].as_array().map(|a| a.len()).unwrap_or(0);
                     log.push(format!("also replaced: {} welcome-page picture(s), {} toolbar drawing(s)", count("welcome"), count("vector")));
+                    // What this run left out on an unknown Brave build, written where Settings shows
+                    // it (review 2, 5.2: the copy went live half-patched and nobody was told).
+                    missed_now = Some(misses(&report));
                     ok = true;
                     break;
                 }
@@ -486,6 +569,16 @@ pub fn make(official_exe: &Path, home: &Path, dry_run: bool) -> Result<Vec<Strin
     }
     if dest.exists() {
         let _ = fs::remove_dir_all(&old);
+    }
+    // Written now that this copy is the one in use (review 9, G28), in plain words.
+    if let (Some(note), Some(missed)) = (incomplete_note(), missed_now) {
+        if missed.is_empty() {
+            let _ = fs::remove_file(&note);
+        } else {
+            let plain: Vec<String> = missed.iter().map(|m| plain_miss(m)).collect();
+            let _ = fs::write(&note, plain.join("\n"));
+            log.push(format!("NOT done on this Brave build: {}", plain.join("; ")));
+        }
     }
     let exe = dest.join("brave.exe");
     match crate::launch::ensure_gpu_preference(&exe, false) {
@@ -545,17 +638,17 @@ mod tests {
     }
 
     #[test]
-    fn the_copy_is_used_only_when_it_matches_the_installed_brave_and_is_patched() {
+    fn a_patched_copy_is_used_and_stays_pinned_when_brave_updates() {
         let root = folder("state");
         let official = fake_brave(&root.join("official"), "157.1.99.56", false);
         let copy = root.join("copy");
         assert_eq!(state(&official, &copy), Copy::None);
         fake_brave(&copy, "157.1.99.56", true);
         assert_eq!(state(&official, &copy), Copy::Fresh(copy.join("brave.exe")));
-        // Brave updated itself: the copy is stale.
+        // Brave updated itself: the copy stays in use (pinned), and is not remade.
         fs::remove_dir_all(root.join("official")).unwrap();
         let official = fake_brave(&root.join("official"), "158.1.100.3", false);
-        assert_eq!(state(&official, &copy), Copy::Stale { copy: "157.1.99.56".into(), installed: "158.1.100.3".into() });
+        assert_eq!(state(&official, &copy), Copy::Fresh(copy.join("brave.exe")));
         // A copy that was never patched is not used either.
         fs::remove_dir_all(&copy).unwrap();
         fake_brave(&copy, "158.1.100.3", false);

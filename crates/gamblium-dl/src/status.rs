@@ -20,6 +20,12 @@ pub fn init(path: PathBuf) {
     *STATE.lock().unwrap() = Some(m);
     let _ = FILE.set(path);
     write();
+    // A job that gets nothing for a while sends no events: its state is still written every
+    // 10 s (write() skips it otherwise), so the list does not take it for stopped (review 4, B4).
+    std::thread::spawn(|| loop {
+        std::thread::sleep(std::time::Duration::from_secs(10));
+        write();
+    });
 }
 
 /// Folds one progress event into the state and rewrites the file.
@@ -81,10 +87,31 @@ pub fn event(v: &Value) {
     write();
 }
 
+/// The last state written (without its time) and when: an unchanged state is not written again,
+/// and a changing one at most once a second until it ends (a torrent wrote twice a second, also
+/// while seeding with nothing happening).
+static LAST: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
+
 fn write() {
     let Some(file) = FILE.get() else { return };
     let mut guard = STATE.lock().unwrap();
     let Some(m) = guard.as_mut() else { return };
+    let mut plain = m.clone();
+    plain.remove("updated");
+    let body = Value::Object(plain).to_string();
+    let ended = matches!(m.get("state").and_then(Value::as_str), Some("done" | "error" | "stopped" | "cancelled"));
+    {
+        let mut last = LAST.lock().unwrap();
+        if let Some((prev, at)) = last.as_ref() {
+            // Unchanged: written again every 10 s all the same (the list reads a state file older
+            // than 20 s as a program that stopped; review 3, A3).
+            let unchanged_recent = *prev == body && at.elapsed() < std::time::Duration::from_secs(10);
+            if unchanged_recent || (*prev != body && !ended && at.elapsed() < std::time::Duration::from_secs(1)) {
+                return;
+            }
+        }
+        *last = Some((body, std::time::Instant::now()));
+    }
     m.insert("updated".into(), json!(now()));
     // Written beside and renamed, so a reader never sees half a file.
     let mut tmp = file.as_os_str().to_owned();

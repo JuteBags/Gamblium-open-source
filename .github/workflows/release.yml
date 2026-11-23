@@ -109,7 +109,7 @@ jobs:
         run: |
           out="Gamblium-$VERSION-windows-x64"
           mkdir -p "dist/$out/tools" "dist/$out/browser"
-          cp target/release/gamblium.exe target/release/gamblium-app.exe target/release/gamblium-cli.exe target/release/gamblium-dl.exe "dist/$out/"
+          cp target/release/gamblium.exe target/release/gamblium-app.exe target/release/gamblium-cli.exe target/release/gamblium-dl.exe target/release/gamblium-lyrics.exe "dist/$out/"
           cp -r extension presets theme branding "dist/$out/"
           cp LICENSE README.md "dist/$out/"
           cp -r "$(cygpath "$BROWSER")" "dist/$out/browser/Application"

@@ -1,0 +1,20 @@
+[package]
+name = "gamblium-pdf"
+version = "0.1.0"
+edition = "2021"
+description = "Gamblium's own PDF engine: render, organise, merge, watermark, sign, images to PDF. Built for WebAssembly."
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+hayro = "0.9"
+lopdf = { version = "0.38", default-features = false, features = ["wasm_js"] }
+wasm-bindgen = "=0.2.100"
+sha2 = "0.10"
+skrifa = "0.49" # reads embedded font programs (already in the tree through hayro)
+
+[profile.release]
+opt-level = 3 # speed over size: page drawing is the CPU cost of reading a PDF
+lto = true

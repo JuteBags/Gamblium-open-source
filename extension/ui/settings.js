@@ -179,6 +179,8 @@ async function loadBrand() {
   $('brandOfficial').disabled = b.copy === 'none';
   if (b.copy === 'none') $('brandHint').textContent = 'There is no rebranded copy on this computer. Make one with: gamblium rebrand';
   if (b.copy === 'stale') $('brandHint').textContent = 'Brave has been updated, so the rebranded copy is out of date and Brave\'s own look is showing. Refresh it with: gamblium rebrand';
+  // Changes the last rebrand could not make on this Brave build (review 2, 5.2).
+  if (b.copy === 'fresh' && Array.isArray(b.incomplete) && b.incomplete.length) $('brandHint').textContent = `On this Brave version the rebrand could not make every change: ${b.incomplete.join('; ')}. Brave's own look shows there.`;
 }
 
 $('darkPages').addEventListener('change', async () => {
@@ -396,27 +398,31 @@ $('saveFolder').addEventListener('click', () => chrome.tabs.create({ url: 'chrom
 
 // ---- Agents changing settings: the permission, and taking it back ----------------------
 
-async function loadPermit(view) {
-  const v = view ?? (await send({ type: 'native', request: { type: 'permit-get', what: 'settings' } }));
-  $('permitField').hidden = !(v && v.ok);
+// The same row for agents in the person's own windows (review 8, F6), ids prefixed "person".
+async function loadPermit(view, what = 'settings') {
+  const ids = what === 'person' ? { field: 'personField', choices: 'personChoices', now: 'personNow' } : { field: 'permitField', choices: 'permitChoices', now: 'permitNow' };
+  const thing = what === 'person' ? 'work in your own session windows' : 'change settings';
+  const v = view ?? (await send({ type: 'native', request: { type: 'permit-get', what } }));
+  $(ids.field).hidden = !(v && v.ok);
   if (!v || !v.ok) return;
   const p = permitParts(v, Date.now());
   const label = (m) => (m === 0 ? 'Ask each time' : m === -1 ? 'Always' : permitShort(m));
-  $('permitChoices').replaceChildren(...(v.choices ?? [0, 30, 60, 120, 360, -1]).map((minutes) => {
+  $(ids.choices).replaceChildren(...(v.choices ?? [0, 30, 60, 120, 360, -1]).map((minutes) => {
     const b = el('button', { type: 'button', textContent: label(minutes) });
     b.setAttribute('aria-pressed', String(p.choice === minutes));
     b.addEventListener('click', async () => {
-      const r = await send({ type: 'native', request: { type: 'permit-set', what: 'settings', minutes } });
+      const r = await send({ type: 'native', request: { type: 'permit-set', what, minutes } });
       document.activeElement?.blur();
-      if (r && r.ok) loadPermit(r);
-      else $('permitNow').textContent = r?.error || 'That could not be changed.';
+      if (r && r.ok) loadPermit(r, what);
+      else $(ids.now).textContent = r?.error || 'That could not be changed.';
     });
     return b;
   }));
-  $('permitNow').textContent = p.state === 'allowed' ? `${permitStatus(v, Date.now())} Until ${p.until}.` : permitStatus(v, Date.now());
-  if (!$('bridge').checked) for (const x of $('permitChoices').querySelectorAll('button')) x.disabled = true;
+  $(ids.now).textContent = p.state === 'allowed' ? `${permitStatus(v, Date.now(), thing)} Until ${p.until}.` : permitStatus(v, Date.now(), thing);
+  if (what === 'settings' && !$('bridge').checked) for (const x of $(ids.choices).querySelectorAll('button')) x.disabled = true;
 }
 loadPermit();
+loadPermit(undefined, 'person');
 
 // ---- Copy buttons beside commands ----------------------------------------------------
 for (const b of document.querySelectorAll('[data-copy]')) {
@@ -427,7 +433,7 @@ for (const b of document.querySelectorAll('[data-copy]')) {
   });
 }
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) loadPermit();
+  if (!document.hidden) { loadPermit(); loadPermit(undefined, 'person'); }
 });
 
 // ---- One view per area -------------------------------------------------------------
@@ -437,7 +443,9 @@ const AREAS = ['tabs', 'look', 'downloads', 'network', 'agents', 'gamblium', 'pr
 let bringShown = false;
 function showArea() {
   const asked = location.hash.slice(1);
-  const area = asked === 'all' ? 'all' : AREAS.includes(asked) ? asked : 'tabs';
+  // #lyrics: the lyrics window's gear opens the Look area at its section.
+  const area = asked === 'all' ? 'all' : asked === 'lyrics' ? 'look' : AREAS.includes(asked) ? asked : 'tabs';
+  if (asked === 'lyrics') setTimeout(() => $('lyrics-title') && $('lyrics-title').scrollIntoView({ block: 'start' }), 50);
   // The other browsers are looked at only when this area is opened.
   if (area === 'bring' && !bringShown) {
     bringShown = true;
@@ -643,3 +651,160 @@ $('popOutVideo').addEventListener('change', () => chrome.storage.local.set({ pop
 chrome.storage.local.get({ peekOn: true }).then(({ peekOn }) => { $('peekOn').checked = peekOn; });
 $('peekOn').addEventListener('change', () => chrome.storage.local.set({ peekOn: $('peekOn').checked }));
 
+// How Gamblium starts from its icon (owner, Nov 16 2026): a neutral window that belongs to no
+// session, or the session closed last with its windows and tabs. Kept by the helper.
+const START_HINT = {
+  fresh: 'A clean window that belongs to no session. Pick Personal, Work or another from the New Tab page. Nothing of it is kept when you close it.',
+  last: 'The session you closed last comes back with its windows and tabs (asleep until you open them), and a New Tab page in front.',
+};
+function showStart(mode) {
+  for (const b of document.querySelectorAll('#startChoices button')) b.setAttribute('aria-pressed', String(b.dataset.start === mode));
+  $('startHint').textContent = START_HINT[mode] || '';
+}
+send({ type: 'native', request: { type: 'named-sessions', args: ['start-mode'] } }).then((r) => {
+  if (r?.ok === false || !r?.startMode) { $('startField').hidden = true; return; }
+  showStart(r.startMode);
+}).catch(() => { $('startField').hidden = true; });
+for (const b of document.querySelectorAll('#startChoices button')) b.addEventListener('click', async () => {
+  const r = await send({ type: 'native', request: { type: 'named-sessions', args: ['start-mode', b.dataset.start] } });
+  if (r?.startMode) showStart(r.startMode);
+});
+
+// ---- Floating lyrics: the look (the lyrics window keeps it in its style.json, through the helper) ----
+const LYR_FONTS = ['Segoe UI', 'Segoe UI Semibold', 'Segoe UI Black', 'Bahnschrift', 'Georgia', 'Cambria', 'Palatino Linotype', 'Trebuchet MS', 'Verdana', 'Comic Sans MS', 'Consolas', 'Nirmala UI'];
+let lyrStyle = null;
+let lyrTimer = null;
+let lyrPending = {};
+const lyrName = (p) => p.charAt(0).toUpperCase() + p.slice(1);
+function lyrPaint(st, presets) {
+  const sel = $('lyrPreset');
+  if (presets && !sel.options.length) for (const p of presets) sel.append(new Option(lyrName(p), p));
+  const fonts = $('lyrFont');
+  if (!fonts.options.length) for (const f of LYR_FONTS) fonts.append(new Option(f, f));
+  if (![...fonts.options].some((o) => o.value === st.font)) fonts.append(new Option(st.font, st.font));
+  sel.value = st.preset;
+  $('lyrLayout').value = st.layout;
+  $('lyrScript').value = st.script;
+  $('lyrLines').value = String(st.lines);
+  fonts.value = st.font;
+  const size = st.layout === 'card' ? st.card_text_size : st.size;
+  $('lyrSize').value = size; $('lyrSizeText').textContent = `${Math.round(size)} px`;
+  $('lyrColor').value = st.color; $('lyrGradOn').checked = !!st.gradient_to; $('lyrGrad').value = st.gradient_to || st.color; $('lyrGrad').disabled = !st.gradient_to;
+  $('lyrTitle').value = st.title_color;
+  $('lyrGlow').value = st.glow_color; $('lyrGlowSize').value = st.glow_radius; $('lyrGlowText').textContent = st.glow_radius ? `${st.glow_radius} px` : 'off';
+  $('lyrOutline').value = st.outline_color; $('lyrOutlineSize').value = st.outline_width; $('lyrOutlineText').textContent = st.outline_width ? `${st.outline_width} px` : 'off';
+  $('lyrSparkle').checked = st.sparkle; $('lyrSparkleColor').value = st.sparkle_color; $('lyrSparkleAmount').value = st.sparkle_amount; $('lyrSparkleText').textContent = `${st.sparkle_amount}`;
+  $('lyrShine').checked = st.shine; $('lyrShineColor').value = st.shine_color;
+  $('lyrBg').value = st.background; $('lyrBgOpacity').value = st.background_opacity; $('lyrBgText').textContent = `${Math.round(st.background_opacity)}%`;
+  $('lyrArt').value = st.art_opacity; $('lyrArtText').textContent = `${Math.round(st.art_opacity)}%`;
+  $('lyrMood').value = st.mood_tint; $('lyrMoodText').textContent = `${Math.round(st.mood_tint)}%`;
+  $('lyrRound').value = st.corner_radius; $('lyrRoundText').textContent = `${Math.round(st.corner_radius)} px`;
+  $('lyrThrough').checked = st.click_through;
+  $('lyrGlass').checked = st.glass; $('lyrGlassK').value = st.glass_strength; $('lyrGlassText').textContent = `${Math.round(st.glass_strength)}%`;
+  $('lyrGlassK').disabled = !st.glass;
+  $('lyrSeekBar').checked = st.words_seek_bar !== false;
+  knobPaint(st);
+}
+async function lyrLoad() {
+  const r = await send({ type: 'native', request: { type: 'lyrics-style-get' } }).catch(() => null);
+  if (!r || r.ok === false || !r.style) {
+    $('lyrState').textContent = 'The lyrics window is not installed yet (it comes with the next Gamblium update).';
+    for (const x of $('lyrFields').querySelectorAll('input, select, button')) x.disabled = true;
+    return;
+  }
+  lyrStyle = r.style;
+  lyrPaint(lyrStyle, r.presets);
+}
+// Changes go out a moment after the last touch (a dragged slider is one change).
+function lyrSet(changes, reload = false) {
+  Object.assign(lyrPending, changes);
+  Object.assign(lyrStyle, changes);
+  lyrPaint(lyrStyle);
+  clearTimeout(lyrTimer);
+  lyrTimer = setTimeout(async () => {
+    const c = lyrPending;
+    lyrPending = {};
+    const r = await send({ type: 'native', request: { type: 'lyrics-style-set', changes: c } }).catch(() => null);
+    if (!r || r.ok === false) $('lyrState').textContent = 'Could not save the lyrics look: ' + ((r && r.error) || 'the helper did not answer');
+    else if (reload) await lyrLoad();
+  }, 150);
+}
+const lyrNum = (id) => Number($(id).value);
+$('lyrPreset').addEventListener('change', () => lyrSet({ preset: $('lyrPreset').value }, true));
+$('lyrReset').addEventListener('click', () => lyrSet({ preset: lyrStyle.preset }, true));
+$('lyrLayout').addEventListener('change', () => lyrSet({ layout: $('lyrLayout').value }));
+$('lyrScript').addEventListener('change', () => lyrSet({ script: $('lyrScript').value }));
+$('lyrLines').addEventListener('change', () => lyrSet({ lines: lyrNum('lyrLines') }));
+$('lyrFont').addEventListener('change', () => lyrSet({ font: $('lyrFont').value }));
+$('lyrSize').addEventListener('input', () => lyrSet(lyrStyle.layout === 'card' ? { card_text_size: lyrNum('lyrSize') } : { size: lyrNum('lyrSize') }));
+$('lyrColor').addEventListener('input', () => lyrSet({ color: $('lyrColor').value }));
+$('lyrGradOn').addEventListener('change', () => lyrSet({ gradient_to: $('lyrGradOn').checked ? $('lyrGrad').value : null }));
+$('lyrGrad').addEventListener('input', () => lyrSet({ gradient_to: $('lyrGrad').value }));
+$('lyrTitle').addEventListener('input', () => lyrSet({ title_color: $('lyrTitle').value }));
+$('lyrGlow').addEventListener('input', () => lyrSet({ glow_color: $('lyrGlow').value, glow_radius: lyrStyle.glow_radius || 10 }));
+$('lyrGlowSize').addEventListener('input', () => lyrSet({ glow_radius: lyrNum('lyrGlowSize') }));
+$('lyrOutline').addEventListener('input', () => lyrSet({ outline_color: $('lyrOutline').value, outline_width: lyrStyle.outline_width || 2 }));
+$('lyrOutlineSize').addEventListener('input', () => lyrSet({ outline_width: lyrNum('lyrOutlineSize') }));
+$('lyrSparkle').addEventListener('change', () => lyrSet({ sparkle: $('lyrSparkle').checked }));
+$('lyrSparkleColor').addEventListener('input', () => lyrSet({ sparkle_color: $('lyrSparkleColor').value, sparkle: true }));
+$('lyrSparkleAmount').addEventListener('input', () => lyrSet({ sparkle_amount: lyrNum('lyrSparkleAmount'), sparkle: true }));
+$('lyrShine').addEventListener('change', () => lyrSet({ shine: $('lyrShine').checked }));
+$('lyrShineColor').addEventListener('input', () => lyrSet({ shine_color: $('lyrShineColor').value, shine: true }));
+$('lyrBg').addEventListener('input', () => lyrSet({ background: $('lyrBg').value }));
+$('lyrBgOpacity').addEventListener('input', () => lyrSet({ background_opacity: lyrNum('lyrBgOpacity') }));
+$('lyrArt').addEventListener('input', () => lyrSet({ art_opacity: lyrNum('lyrArt') }));
+$('lyrMood').addEventListener('input', () => lyrSet({ mood_tint: lyrNum('lyrMood') }));
+$('lyrRound').addEventListener('input', () => lyrSet({ corner_radius: lyrNum('lyrRound') }));
+$('lyrThrough').addEventListener('change', () => lyrSet({ click_through: $('lyrThrough').checked }));
+$('lyrGlass').addEventListener('change', () => lyrSet({ glass: $('lyrGlass').checked }));
+$('lyrSeekBar').addEventListener('change', () => lyrSet({ words_seek_bar: $('lyrSeekBar').checked }));
+$('lyrGlassK').addEventListener('input', () => lyrSet({ glass_strength: lyrNum('lyrGlassK') }));
+void lyrLoad();
+
+// ---- The seek bar's knob: a shape, or the person's own picture (shown while the mouse is over the bar).
+const KNOBS = [
+  ['dot', 'Dot', '<circle cx="12" cy="12" r="6"/>'],
+  ['heart', 'Heart', '<path d="M12 19.5C5 14.5 4.5 10.5 6.5 8.3c1.8-1.9 4.3-1.2 5.5.9 1.2-2.1 3.7-2.8 5.5-.9 2 2.2 1.5 6.2-5.5 11.2z"/>'],
+  ['star', 'Star', '<path d="M12 4.5l2.2 4.8 5.2.5-3.9 3.5 1.1 5.1L12 15.8l-4.6 2.6 1.1-5.1-3.9-3.5 5.2-.5z"/>'],
+  ['note', 'Music note', '<path d="M10.5 16.5a2.5 2.5 0 1 1-2.5-2.5c.9 0 1.6.3 2.5.8V5.5l7-1.5v3.5l-5 1v8z"/>'],
+  ['moon', 'Moon', '<path d="M15.5 4.8A7.5 7.5 0 1 0 19.2 16 6 6 0 0 1 15.5 4.8z"/>'],
+  ['sparkle', 'Sparkle', '<path d="M12 3.5l1.6 6.9 6.9 1.6-6.9 1.6L12 20.5l-1.6-6.9L3.5 12l6.9-1.6z"/>'],
+  ['diamond', 'Diamond', '<path d="M12 4l5.5 8-5.5 8-5.5-8z"/>'],
+];
+function knobPaint(st) {
+  const box = $('lyrKnobs');
+  if (!box.childElementCount) {
+    for (const [key, label, svg] of [...KNOBS, ['custom', 'Your picture', '<rect x="5.5" y="5.5" width="13" height="13" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7.5 16l3-3.5 2.5 2.5 2-2 2 3z"/>']]) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'knob';
+      b.dataset.knob = key;
+      b.title = label;
+      b.setAttribute('aria-label', label);
+      b.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">${svg}</svg>`;
+      b.addEventListener('click', () => (key === 'custom' ? $('lyrKnobFile').click() : lyrSet({ knob: key })));
+      box.append(b);
+    }
+  }
+  for (const b of box.children) b.setAttribute('aria-pressed', String(b.dataset.knob === st.knob));
+  $('lyrKnobColor').value = st.knob_color || '#ffffff';
+  $('lyrKnobSize').value = st.knob_size || 11;
+  $('lyrKnobSizeText').textContent = `${Math.round(st.knob_size || 11)} px`;
+}
+$('lyrKnobColor').addEventListener('input', () => lyrSet({ knob_color: $('lyrKnobColor').value }));
+$('lyrKnobSize').addEventListener('input', () => lyrSet({ knob_size: Number($('lyrKnobSize').value) }));
+$('lyrKnobUpload').addEventListener('click', () => $('lyrKnobFile').click());
+$('lyrKnobFile').addEventListener('change', async () => {
+  const f = $('lyrKnobFile').files && $('lyrKnobFile').files[0];
+  $('lyrKnobFile').value = '';
+  if (!f) return;
+  if (f.size > 1 << 20) { $('lyrKnobHint').textContent = 'That picture is larger than 1 MB.'; return; }
+  const buf = new Uint8Array(await f.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+  const r = await send({ type: 'native', request: { type: 'lyrics-knob-upload', data: btoa(bin) } }).catch(() => null);
+  if (!r || r.ok === false) { $('lyrKnobHint').textContent = 'Could not use it: ' + ((r && r.error) || 'the helper did not answer'); return; }
+  $('lyrKnobHint').textContent = 'Your picture is the knob now.';
+  lyrStyle.knob_custom_seen = true;
+  await lyrLoad();
+});

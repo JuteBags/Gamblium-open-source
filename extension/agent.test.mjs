@@ -35,6 +35,24 @@ test("a key name becomes what the browser needs for a real key press", () => {
   assert.equal(keyEvent("NoSuchKey").ok, false);
 });
 
+test("key chords: modifiers, the browser's editing command, no typed text", () => {
+  for (const k of ["Control+v", "Control+c", "ctrl+x", "Meta+v", "Shift+Delete", "Shift+Insert", "Control+Insert"]) assert.equal(keyEvent(k).ok, false, k + ": never the person's own clipboard");
+  const v = keyEvent("Control+b");
+  assert.equal(v.ok, true);
+  assert.equal(v.event.modifiers, 2);
+  assert.deepEqual(keyEvent("Control+a").event.commands, ["selectAll"]);
+  assert.equal(v.event.text, undefined);
+  assert.equal(v.event.windowsVirtualKeyCode, 66);
+  assert.deepEqual(keyEvent("ctrl+shift+z").event.commands, ["redo"]);
+  assert.equal(keyEvent("ctrl+shift+z").event.modifiers, 10);
+  assert.equal(keyEvent("Shift+Tab").event.modifiers, 8);
+  assert.equal(keyEvent("Shift+a").event.text, "A");
+  assert.equal(keyEvent("Control+B").event.key, "b");
+  assert.equal(keyEvent("Control++").event.key, "+");
+  assert.equal(keyEvent("Hyper+v").ok, false);
+  assert.equal(keyEvent("Control+NoSuchKey").ok, false);
+});
+
 test("real input says it needs the agent profile when it is not there", async () => {
   const ctl = makeCtl({});
   globalThis.chrome = { tabs: { get: async (id) => ({ id, windowId: 1 }) } };

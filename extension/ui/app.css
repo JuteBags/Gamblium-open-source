@@ -774,7 +774,7 @@ tr[data-state="asleep"] .tablink { color: var(--text-muted); }
 .tabicon { position: relative; flex: none; display: grid; place-items: center; width: 24px; height: 28px; }
 .tabicon img { width: 16px; height: 16px; border-radius: 3px; }
 .tabicon[style*="--group"]::after { content: ""; position: absolute; left: 3px; right: 3px; bottom: 0; height: 3px; border-radius: 2px; background: var(--group); }
-.tabicon[data-asleep] img { opacity: 0.4; filter: grayscale(1); }
+.tabicon[data-asleep] img { opacity: 0.8; }
 .tabicon[data-pinned] { width: 28px; }
 .tabicon[data-pinned] img { padding: 3px; width: 22px; height: 22px; border-radius: 7px; background: color-mix(in srgb, var(--text) 10%, transparent); }
 
@@ -816,6 +816,14 @@ button.stab:hover { background: color-mix(in srgb, var(--text) 7%, transparent);
 button.stab .tabicon { grid-row: 1 / span 2; }
 button.stab .ttitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 18px; color: var(--text); }
 button.stab .thost { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 14px; color: var(--meta); }
+/* Off the Sessions page (owner, Nov 16 2026): saved tab sets and their controls. */
+.retired { display: none !important; }
+/* A named session's tabs, listed by Show tabs. */
+.ntabs { list-style: none; margin: 6px 0 2px; padding: 0; display: grid; gap: 2px; max-height: 320px; overflow: auto; }
+.ntabs li { display: grid; grid-template-columns: 24px minmax(0, 1fr); column-gap: 8px; align-items: center; padding: 3px 8px 3px 6px; border-radius: 8px; }
+.ntabs .tabicon { grid-row: 1 / span 2; }
+.ntabs .ttitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 18px; color: var(--text); }
+.ntabs .thost { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 14px; color: var(--meta); }
 .stools { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .stools .grow { flex: 1; }
 .stools .check { margin: 0; font-size: 13px; }
@@ -1217,3 +1225,21 @@ tr.limitedit td { white-space: normal; }
 .linkdemo { display: inline-flex; gap: 12px; padding: 6px 12px; border-radius: 8px; background: #121212; box-shadow: inset 0 0 0 1px var(--rim); }
 .linkdemo b { font-weight: 400; text-decoration: underline; text-underline-offset: 2px; }
 .presets .set.link i { box-shadow: inset 0 0 0 1px var(--rim), inset 0 0 0 7px #121212; }
+
+/* A running session: a green dot and its process id, small (owner, Nov 15 2026). */
+.live { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.live .dot { width: 7px; height: 7px; border-radius: 50%; background: #3FB950; box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
+.nsess .kind { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.renameedit { display: inline-flex; gap: 6px; align-items: center; }
+.renameedit input { min-width: 0; width: 14em; }
+.idchip { font: 11px/1 ui-monospace, Consolas, monospace; color: var(--text-muted); background: none; border: 0; padding: 2px 4px; border-radius: 4px; cursor: copy; }
+.idchip:hover { color: inherit; background: rgba(127, 127, 127, .14); }
+
+/* Session manager (owner, Nov 15 2026): Active / Inactive, a filter. */
+.sechead { font-size: 15px; font-weight: 600; margin: 18px 4px 8px; }
+.sfilter { margin-top: 12px; }
+#activeRows { list-style: none; padding: 8px 16px; margin-top: 10px; }
+#now-title .kind { font-size: 12px; font-weight: 400; color: var(--text-muted); margin-left: 6px; }
+
+.sechint { margin: 0 4px 8px; }
+.nsess .wins { margin: 6px 0 2px; }

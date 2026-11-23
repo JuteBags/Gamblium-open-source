@@ -107,7 +107,7 @@ async function showSite() {
   const url = current?.url || '';
   host = /^https?:/.test(url) ? cleanHost(url) : '';
   $('site').hidden = !host;
-  showView('site'); // the browser's menu is the button beside this one; ours opens on the site (or, on our pages, the menu view)
+  showView('menu'); // always opens on Menu (owner, Nov 15 2026); This site is one click away
   $('securityLink').textContent = host ? `Security for ${host}` : 'Security';
   if (!host) return;
   $('siteHost').textContent = host;
@@ -241,11 +241,25 @@ const keysOnly = (keys) => () => { say(`Press ${keys} on the page.`); return 'st
 const GO = {
   tab: () => chrome.tabs.create({}),
   window: () => chrome.windows.create({}),
+  // A window in a session of its own (owner, Nov 15 2026: a normal new window shares every
+  // sign-in, so it isolates nothing). Isolated: a new session with no sign-ins. Forked: a new
+  // session with this browser's sign-ins and none of its tabs. Both get a made-up name, marked
+  // as such; renaming one on the Sessions page keeps it.
+  // Made by the background worker (session-new): the menu closes as soon as the new window takes
+  // focus, which cut its later steps off and a second click made a second window.
+  isolated: () => { send({ type: 'session-new', kind: 'isolated', name: autoName('Window') }); },
+  forked: () => { send({ type: 'session-new', kind: 'forked', name: autoName('Fork') }); },
   private: () => chrome.windows.create({ incognito: true }),
   tor: async () => {
     const r = await send({ type: 'native', request: { type: 'open-tor' } });
     if (r && r.ok === false) throw new Error(r.error || 'The Gamblium helper is needed for a Tor window.');
   },
+  // Profiles (owner, Nov 15 2026: "how do I see profiles?"): the browser's own pages, each profile
+  // its own window with its own cookies, logins and history.
+  profiles: () => chrome.tabs.create({ url: 'chrome://profile-picker/' }),
+  // The picker's own "new profile" page is blank in a tab (it lives in the picker's window): its Add button works.
+  profileNew: () => chrome.tabs.create({ url: 'chrome://profile-picker/' }),
+  profileEdit: () => chrome.tabs.create({ url: 'chrome://settings/manageProfile' }),
   sidebar: () => chrome.tabs.create({ url: 'chrome://settings/appearance' }),
   passwords: () => chrome.tabs.create({ url: 'chrome://password-manager/passwords' }),
   payments: () => chrome.tabs.create({ url: 'chrome://settings/payments' }),
@@ -299,9 +313,12 @@ const GO = {
 const ICON = {
   tab: 'M3 6.5A2.5 2.5 0 0 1 5.5 4h9A2.5 2.5 0 0 1 17 6.5v7a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 3 13.5zM10 7.5v5M7.5 10h5',
   window: 'M3 6.5A2.5 2.5 0 0 1 5.5 4h9A2.5 2.5 0 0 1 17 6.5v7a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 3 13.5zM3 8h14',
+  isolated: 'M3 6.5A2.5 2.5 0 0 1 5.5 4h9A2.5 2.5 0 0 1 17 6.5v7a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 3 13.5zM3 8h14M8 11.5h4M8 11.5v2.5h4v-2.5M8.8 11.5v-1a1.200 1.200 0 0 1 2.400 0v1',
+  forked: 'M6 4.500a1.500 1.500 0 1 0 0 3 1.500 1.500 0 0 0 0-3zM6 7.500v8M14 6a1.500 1.500 0 1 0 0 3 1.500 1.500 0 0 0 0-3zM14 9c0 3-8 2-8 5',
   private: 'M3 9.5c2-1.2 4-1.2 5.5 0h3c1.5-1.2 3.5-1.2 5.5 0M8.8 12.3h2.4M5 7l1-3h8l1 3M4.2 12.5a2.3 2.3 0 1 0 4.6 0 2.3 2.3 0 1 0-4.6 0M11.2 12.5a2.3 2.3 0 1 0 4.6 0 2.3 2.3 0 1 0-4.6 0',
   tor: 'M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM10 5.5a4.5 4.5 0 1 0 0 9M10 8a2 2 0 1 0 0 4',
   sidebar: 'M3.5 4.5h13v11h-13zM8 4.5v11',
+  profiles: 'M7.500 9a2.500 2.500 0 1 0 0-5 2.500 2.500 0 0 0 0 5zM3 16c0-2.500 2-4.500 4.500-4.500S12 13.500 12 16M13 4.300a2.500 2.500 0 0 1 0 4.400M14.500 11.800c1.500.600 2.500 2.100 2.500 4.200',
   passwords: 'M12.500 11.500a4 4 0 1 0-3.700-2.500L3.500 14.300V16.500h2.500v-1.700h1.700v-1.700h1.600l.900-.900a4 4 0 0 0 2.300-.700zM13.500 6.700v.010',
   history: 'M4 10a6 6 0 1 0 1.9-4.4M4 4.5v3h3M10 7v3.3l2.2 1.4',
   bookmarks: 'M6 3.5h8a1 1 0 0 1 1 1V17l-5-3.2L5 17V4.5a1 1 0 0 1 1-1z',
@@ -314,13 +331,15 @@ const ICON = {
   tools: 'M12.500 3.500a3.500 3.500 0 0 0-3.300 4.700L3.500 13.900 6.100 16.500l5.700-5.700a3.500 3.500 0 0 0 4.700-3.300l-2.200 2.200-2.200-.600-.600-2.200z',
   ours: 'M10 2.500 15.500 8 10 17.500 4.500 8zM4.500 8h11',
   help: 'M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM8 8a2 2 0 1 1 2.800 1.800c-.5.300-.8.700-.8 1.300v.4M10 14v.010',
-  settings: 'M10 7.200a2.800 2.800 0 1 0 0 5.600 2.800 2.800 0 0 0 0-5.600zM10 3v1.600M10 15.400V17M3 10h1.600M15.400 10H17M5 5l1.100 1.100M13.900 13.900 15 15M5 15l1.100-1.100M13.900 6.100 15 5',
+  settings: 'M8.58 4.07L8.78 1.84L11.22 1.84L11.42 4.07A6.1 6.1 0 0 1 13.19 4.80L14.91 3.37L16.63 5.09L15.20 6.81A6.1 6.1 0 0 1 15.93 8.58L18.16 8.78L18.16 11.22L15.93 11.42A6.1 6.1 0 0 1 15.20 13.19L16.63 14.91L14.91 16.63L13.19 15.20A6.1 6.1 0 0 1 11.42 15.93L11.22 18.16L8.78 18.16L8.58 15.93A6.1 6.1 0 0 1 6.81 15.20L5.09 16.63L3.37 14.91L4.80 13.19A6.1 6.1 0 0 1 4.07 11.42L1.84 11.22L1.84 8.78L4.07 8.58A6.1 6.1 0 0 1 4.80 6.81L3.37 5.09L5.09 3.37L6.81 4.80A6.1 6.1 0 0 1 8.58 4.07ZM12.60 10.00A2.6 2.6 0 1 1 7.40 10.00A2.6 2.6 0 1 1 12.60 10.00Z',
   exit: 'M8 4H5.500A1.500 1.500 0 0 0 4 5.500v9A1.500 1.500 0 0 0 5.500 16H8M12 6.500 15.500 10 12 13.500M15.500 10H8',
   update: 'M10 15.500v-11M5.500 9 10 4.500 14.500 9',
 };
 // A row: [go, label, keys, icon?]. A flyout: { label, icon, sub: [rows] } (sub may be a function, read when it opens).
 const MENU = [
-  ['tab', 'New tab', 'Ctrl+T'], ['window', 'New window', 'Ctrl+N'], ['private', 'New private window', 'Ctrl+Shift+N'], ['tor', 'New private window with Tor', 'Alt+Shift+N'],
+  ['tab', 'New tab', 'Ctrl+T'], ['window', 'New window', 'Ctrl+N'], ['isolated', 'New session window', ''], ['forked', 'Forked session window', ''], ['private', 'New private window', 'Ctrl+Shift+N'], ['tor', 'New private window with Tor', 'Alt+Shift+N'],
+  // Sessions replace Brave's profiles (owner, Nov 15 2026): each its own sign-ins, forked or cloned.
+  { label: 'Sessions', icon: 'profiles', sub: sessionsSub },
   null,
   ['sidebar', 'Sidebar settings', ''],
   null,
@@ -338,12 +357,51 @@ const MENU = [
   { label: 'Save and share', icon: 'share', sub: [['save', 'Save page as…', 'Ctrl+S'], ['link', 'Copy link', ''], ['markdown', 'Copy as a Markdown link', '']] },
   { label: 'More tools', icon: 'tools', sub: [['dashboard', 'Tabs and memory', 'Shift+Esc'], ['clear', 'Delete browsing data', 'Ctrl+Shift+Del'], ['extensions', 'Extensions', ''], null, ['devtools', 'Developer tools', 'Ctrl+Shift+I']] },
   null,
-  { label: 'Gamblium', icon: 'ours', sub: [['dashboard', 'Tabs and memory', ''], ['sessions', 'Sessions', ''], ['security', 'Security', ''], ['ours', 'Gamblium settings', '']] },
+  { label: 'Gamblium', icon: 'ours', sub: [['dashboard', 'Tabs and memory', ''], ['security', 'Security', ''], ['ours', 'Gamblium settings', '']] },
   { label: 'Help', icon: 'help', sub: [['about', 'About Gamblium', ''], ['shortcuts', 'Keyboard shortcuts', '']] },
   ['settings', 'Settings', ''],
   // Exit closes every window: it asks once, in place.
   ['exit', 'Exit', ''],
 ];
+// A made-up session name: "Window 15 Nov 16.42.07".
+function autoName(word) {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${word} ${d.getDate()} ${d.toLocaleString('en', { month: 'short' })} ${p(d.getHours())}.${p(d.getMinutes())}.${p(d.getSeconds())}`;
+}
+
+// Sessions' flyout: the page, then each named session (a green dot and its process id while it
+// runs; a click shows it in a window), main ones first with their children under them.
+async function sessionsSub() {
+  const rows = [['sessions', 'Session manager', '']];
+  // Both asked at once (one after the other made the flyout slow to open).
+  const [r, ping] = await Promise.all([
+    send({ type: 'native', request: { type: 'named-sessions', args: ['list'] } }).catch(() => null),
+    send({ type: 'native', request: { type: 'ping' } }).catch(() => null),
+  ]);
+  const list = (r && r.ok !== false && Array.isArray(r.sessions)) ? r.sessions.filter((s) => !s.test && !s.temp) : [];
+  const me = ping?.browserPid ?? null;
+  const d = r && r.default;
+  // The owner's own Gamblium (Personal) first, unless this is it (owner, Nov 16 2026: missing here).
+  const own = d && !(me && d.pid === me) ? { go: () => send({ type: 'native', request: { type: 'start-main' } }), label: d.named ? d.name : 'Your Gamblium', keys: d.pid ? String(d.pid) : '', live: !!d.pid } : null;
+  if (list.length || own) {
+    rows.push(null);
+    if (own) rows.push(own);
+    const mains = list.filter((s) => s.kind !== 'child' || !list.some((p) => p.name === s.parent));
+    for (const m of mains.slice(0, 8)) {
+      for (const s of [m, ...list.filter((c) => c.kind === 'child' && c.parent === m.name)]) {
+        rows.push({
+          go: () => send({ type: 'native', request: { type: 'named-sessions', args: [s.pid && s.state === 'window' ? 'focus' : 'open', s.id ? `#${s.id}` : s.name] } }),
+          label: s === m ? s.name : `  ↳ ${s.name}`,
+          keys: s.pid ? String(s.pid) : '',
+          live: !!s.pid,
+        });
+      }
+    }
+  }
+  return rows;
+}
+
 // History's flyout: History, then the tabs closed last (the browser's own list), then Delete browsing data.
 async function recentSub() {
   const rows = [['history', 'History', 'Ctrl+H']];
@@ -392,8 +450,10 @@ function row(m, inFlyout = false) {
     return b;
   }
   if (m.go) {
-    const img = el('img', { className: 'fav', alt: '', width: 16, height: 16, src: chrome.runtime.getURL(`_favicon/?pageUrl=${encodeURIComponent(m.favicon)}&size=32`) });
-    const b = el('button', { type: 'button', role: 'menuitem', className: 'mrow' }, [img, el('span', { textContent: m.label }), el('kbd', {})]);
+    const img = m.favicon ? el('img', { className: 'fav', alt: '', width: 16, height: 16, src: chrome.runtime.getURL(`_favicon/?pageUrl=${encodeURIComponent(m.favicon)}&size=32`) }) : icon('');
+    const keys = el('kbd', { className: m.live ? 'live' : '', textContent: m.keys || '' });
+    if (m.live) keys.prepend(el('i', { className: 'dot', ariaHidden: 'true' }));
+    const b = el('button', { type: 'button', role: 'menuitem', className: 'mrow' }, [img, el('span', { textContent: m.label }), keys]);
     b.addEventListener('click', () => run(m.go, b));
     return b;
   }

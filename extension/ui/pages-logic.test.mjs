@@ -448,7 +448,10 @@ import { namedNameError, proxyAddress, namedView, namedActionLabel } from './pag
 test('a named session needs a plain name that is free', () => {
   assert.equal(namedNameError('work-2'), '');
   assert.match(namedNameError(''), /Give the session a name/);
-  assert.match(namedNameError('my work'), /letters, digits/);
+  assert.equal(namedNameError('my work'), '');
+  assert.match(namedNameError('  My   Work ', ['my work']), /already a session/);
+  assert.match(namedNameError('a/b'), /cannot have/);
+  assert.match(namedNameError('#abc'), /cannot start/);
   assert.match(namedNameError('x'.repeat(41)), /at most 40/);
   assert.match(namedNameError('Open'), /command word/);
   assert.match(namedNameError('Work', ['work']), /already a session/);
@@ -572,4 +575,12 @@ test('versionLabel: the semver of the helper read as people read it', async () =
   assert.equal(versionLabel('1.0.0-beta'), '1.0.0 beta');
   assert.equal(versionLabel('1.2.0'), '1.2.0');
   assert.equal(versionLabel(undefined), '');
+});
+
+import { sleepSaid } from './pages-logic.js';
+test('sleepSaid: an already-asleep tab is not an error', () => {
+  assert.equal(sleepSaid({ slept: 1, already: 0, showing: 0, gone: 0, failed: 0 }), '1 tab put to sleep.');
+  assert.equal(sleepSaid({ slept: 0, already: 1, showing: 0, gone: 0, failed: 0 }), 'That tab was already asleep.');
+  assert.equal(sleepSaid({ slept: 2, already: 1, showing: 0, gone: 1, failed: 0 }), '2 tabs put to sleep; 1 already asleep; 1 closed meanwhile.');
+  assert.equal(sleepSaid({ slept: 0, already: 0, showing: 0, gone: 0, failed: 0 }), 'Nothing to put to sleep.');
 });

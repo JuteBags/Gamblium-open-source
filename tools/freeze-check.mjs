@@ -123,7 +123,7 @@ try {
   server.close();
   for (let i = 0; i < 5; i++) {
     try {
-      fs.rmSync(prof, { recursive: true, force: true });
+      fs.rmSync(prof, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
       break;
     } catch {
       await sleep(700);
