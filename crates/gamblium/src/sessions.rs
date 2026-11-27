@@ -233,12 +233,18 @@ fn prune_unused() {
         let n = note(&e.dir);
         let running = pid_of(&e.dir).is_some();
         let made = n["createdAt"].as_u64().unwrap_or(0);
-        // A No session window leaves nothing behind: it is deleted once its browser has closed
-        // (Local State written as it ends), not kept.
+        // A No session window is not kept as a session once its browser has closed (Local State
+        // written as it ends). One that showed a website or a file is set aside for 14 days like
+        // any removed window, never deleted on the spot (Nov 28 2026: a day's work in a No session
+        // window was deleted for good by the next icon start); one that showed nothing goes now.
         // Age first, then the lock: a brand-new window's lockfile is never opened (review 3, A19);
         // a start still being made (the launcher's mark, up to 120 s) counts as in use.
         if n["temp"] == true && now.saturating_sub(made) > 60_000 && !running && !crate::pack::in_use(&e.dir) {
-            let _ = fs::remove_dir_all(&e.dir);
+            if visited_anything(&e.dir) {
+                put_aside(&e.dir);
+            } else {
+                let _ = fs::remove_dir_all(&e.dir);
+            }
             continue;
         }
         if n["auto"] != true || running {
@@ -1977,6 +1983,36 @@ mod prune_tests {
         assert!(unused_window(&json!({ "auto": true, "createdAt": now - 120_000, "tabs": ["chrome://newtab/"] }), false, false, now));
         // No createdAt (made before it was noted): kept.
         assert!(!unused_window(&json!({ "auto": true }), false, false, now));
+    }
+
+    /// The clean-up sets a closed No session window aside instead of deleting it when this says
+    /// it was used: a website in its history, a packed profile, or anything that cannot be read.
+    #[test]
+    fn a_window_that_showed_a_website_counts_as_used() {
+        let dir = std::env::temp_dir().join(format!("gamblium-visited-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        // Never started: nothing to keep.
+        assert!(!visited_anything(&dir));
+        // A profile with no history file: something unexpected, kept.
+        fs::create_dir_all(dir.join("Default")).unwrap();
+        assert!(visited_anything(&dir));
+        // New tab pages only: nothing to keep.
+        let history = dir.join("Default").join("History");
+        let db = rusqlite::Connection::open(&history).unwrap();
+        db.execute_batch("CREATE TABLE urls (id INTEGER PRIMARY KEY, url TEXT); INSERT INTO urls (url) VALUES ('chrome://newtab/');").unwrap();
+        drop(db);
+        assert!(!visited_anything(&dir));
+        // A website: kept.
+        let db = rusqlite::Connection::open(&history).unwrap();
+        db.execute("INSERT INTO urls (url) VALUES ('https://mail.google.com/')", []).unwrap();
+        drop(db);
+        assert!(visited_anything(&dir));
+        // A packed profile: its history is inside the pack, kept.
+        fs::remove_dir_all(dir.join("Default")).unwrap();
+        fs::write(dir.join("profile.tar.zst"), b"").unwrap();
+        assert!(visited_anything(&dir));
+        fs::remove_dir_all(&dir).unwrap();
     }
 }
 

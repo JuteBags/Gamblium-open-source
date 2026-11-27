@@ -654,7 +654,7 @@ $('peekOn').addEventListener('change', () => chrome.storage.local.set({ peekOn: 
 // How Gamblium starts from its icon (owner, Nov 16 2026): a neutral window that belongs to no
 // session, or the session closed last with its windows and tabs. Kept by the helper.
 const START_HINT = {
-  fresh: 'A clean window that belongs to no session. Pick Personal, Work or another from the New Tab page. Nothing of it is kept when you close it.',
+  fresh: 'A clean window that belongs to no session. Pick Personal, Work or another from the New Tab page. It is not kept as a session when you close it (one you browsed in is set aside for 14 days).',
   last: 'The session you closed last comes back with its windows and tabs (asleep until you open them), and a New Tab page in front.',
 };
 function showStart(mode) {
