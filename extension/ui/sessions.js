@@ -64,6 +64,10 @@ let mainSets = []; // its saved tab sets, mirrored (cli-view.sealed)
 // page called Work "This Gamblium" and listed it again under Active, and the owner's own Gamblium
 // was nowhere).
 const mySession = () => { try { return myPid ? named.find((s) => s.pid && s.pid === myPid) : null; } catch { return null; } }; // myPid is declared further down
+// No session windows are left out of the lists, but this page may run in one (Nov 28 2026: the
+// page called a No session window "This Gamblium, your own", so nothing said it was temporary; issue #2).
+let temps = [];
+const myTemp = () => { try { return myPid ? temps.find((s) => s.pid && s.pid === myPid) ?? null : null; } catch { return null; } };
 let busy = null; // the name being started, opened, hidden or stopped
 let editing = null; // the name whose proxy is being changed
 let namedConfirm = null; // the name whose Delete was pressed once
@@ -79,6 +83,7 @@ async function readNamed() {
   const ok = r?.ok !== false && Array.isArray(r?.sessions);
   const showTests = new URLSearchParams(location.search).has('tests');
   named = ok ? r.sessions.filter((s) => (showTests || !s.test) && !s.temp) : [];
+  temps = ok ? r.sessions.filter((s) => s.temp) : [];
   mainGamblium = ok ? r.default || null : null;
   mainSets = ok && Array.isArray(r.tabSets) ? r.tabSets : [];
   // No answer at all: the panel stays away. An answer that fails after it was there keeps it, to show why.
@@ -103,11 +108,14 @@ function renderNamed() {
   $('namedRows').classList.toggle('picking', picked.size > 0);
   const want = (s) => filter === 'all' || (filter === 'named' && s.named !== false) || (filter === 'unnamed' && s.named === false);
   const me = mySession();
+  // A No session window is not the owner's own Gamblium either: theirs is listed like a session's.
+  const neutral = me ? null : myTemp();
+  const here = me || neutral;
   const active = shown.filter((s) => s.state !== 'stopped' && want(s) && s !== me);
   // In a session, the owner's own Gamblium is another browser that is running: listed here.
-  const own = me && mainGamblium?.state === 'running' && filter === 'all' ? [mainRow(mainGamblium)] : [];
+  const own = here && mainGamblium?.state === 'running' && filter === 'all' ? [mainRow(mainGamblium)] : [];
   // Closed, it is an inactive session like any other (owner, Nov 16 2026: it vanished from the list).
-  const ownClosed = me && mainGamblium && mainGamblium.state !== 'running' && filter === 'all' && filterNamed([{ name: mainGamblium.named ? mainGamblium.name : 'Your Gamblium', tabs: (mainGamblium.windows || []).flatMap((w) => w.tabs || []) }], namedQuery).length ? [mainRow(mainGamblium)] : [];
+  const ownClosed = here && mainGamblium && mainGamblium.state !== 'running' && filter === 'all' && filterNamed([{ name: mainGamblium.named ? mainGamblium.name : 'Your Gamblium', tabs: (mainGamblium.windows || []).flatMap((w) => w.tabs || []) }], namedQuery).length ? [mainRow(mainGamblium)] : [];
   const inactive = shown.filter((s) => s.state === 'stopped' && want(s));
   const anon = privateWindows > 0 && filter === 'all' ? [el('li', { className: 'nsess anon' }, [
     el('span', { ariaHidden: 'true' }),
@@ -123,9 +131,9 @@ function renderNamed() {
   $('activeCount').textContent = nActive ? String(nActive) : '';
   // The card on top is the browser this page is in: a session by its name, or the owner's own.
   const mainName = mainGamblium?.named ? mainGamblium.name : null;
-  $('now-title').firstChild.textContent = me ? `${me.name} ` : `${mainName || 'This Gamblium'} `;
-  $('now-title').querySelector('.kind').textContent = me ? `this session (#${me.id}), its own sign-ins` : mainName ? 'this Gamblium: every window you open normally' : 'your own, every window you open normally';
-  $('mainRename').hidden = !!me || !mainGamblium;
+  $('now-title').firstChild.textContent = me ? `${me.name} ` : neutral ? `${neutral.name} ` : `${mainName || 'This Gamblium'} `;
+  $('now-title').querySelector('.kind').textContent = me ? `this session (#${me.id}), its own sign-ins` : neutral ? 'not a session: removed after you close it' : mainName ? 'this Gamblium: every window you open normally' : 'your own, every window you open normally';
+  $('mainRename').hidden = !!here || !mainGamblium;
   $('ownCard').hidden = filter !== 'all';
   render();
 }
