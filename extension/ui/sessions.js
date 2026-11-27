@@ -65,7 +65,7 @@ let mainSets = []; // its saved tab sets, mirrored (cli-view.sealed)
 // was nowhere).
 const mySession = () => { try { return myPid ? named.find((s) => s.pid && s.pid === myPid) : null; } catch { return null; } }; // myPid is declared further down
 // No session windows are left out of the lists, but this page may run in one (Nov 28 2026: the
-// page called a No session window "This Gamblium, your own" and its owner lost a day's work in it).
+// page called a No session window "This Gamblium, your own", so nothing said it was temporary; issue #2).
 let temps = [];
 const myTemp = () => { try { return myPid ? temps.find((s) => s.pid && s.pid === myPid) ?? null : null; } catch { return null; } };
 let busy = null; // the name being started, opened, hidden or stopped

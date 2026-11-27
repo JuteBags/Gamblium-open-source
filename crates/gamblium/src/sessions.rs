@@ -235,8 +235,8 @@ fn prune_unused() {
         let made = n["createdAt"].as_u64().unwrap_or(0);
         // A No session window is not kept as a session once its browser has closed (Local State
         // written as it ends). One that showed a website or a file is set aside for 14 days like
-        // any removed window, never deleted on the spot (Nov 28 2026: a day's work in a No session
-        // window was deleted for good by the next icon start); one that showed nothing goes now.
+        // any removed window, never deleted on the spot (Nov 28 2026: a used No session window was
+        // deleted for good by the next icon start, issue #2); one that showed nothing goes now.
         // Age first, then the lock: a brand-new window's lockfile is never opened (review 3, A19);
         // a start still being made (the launcher's mark, up to 120 s) counts as in use.
         if n["temp"] == true && now.saturating_sub(made) > 60_000 && !running && !crate::pack::in_use(&e.dir) {
